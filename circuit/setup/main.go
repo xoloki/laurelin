@@ -1,5 +1,6 @@
-// setup runs Groth16 trusted setup for TransferCircuit and prints the
-// verification key as Rust source, ready to paste into src/lib.rs.
+// setup runs Groth16 trusted setup for TransferCircuit, saves the proving key
+// to circuit/setup/pk.bin, and prints the verification key as Rust source
+// ready to paste into src/lib.rs.
 //
 // Usage:
 //
@@ -21,6 +22,8 @@ import (
 	"laurelin/circuit"
 )
 
+const pkPath = "setup/pk.bin"
+
 func main() {
 	fmt.Fprintln(os.Stderr, "Compiling circuit…")
 	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit.TransferCircuit{})
@@ -36,7 +39,18 @@ func main() {
 		fmt.Fprintf(os.Stderr, "setup: %v\n", err)
 		os.Exit(1)
 	}
-	_ = pk
+
+	fmt.Fprintf(os.Stderr, "Writing proving key to %s…\n", pkPath)
+	pkFile, err := os.Create(pkPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "create pk: %v\n", err)
+		os.Exit(1)
+	}
+	if _, err := pk.WriteTo(pkFile); err != nil {
+		fmt.Fprintf(os.Stderr, "write pk: %v\n", err)
+		os.Exit(1)
+	}
+	pkFile.Close()
 
 	vkBN := vk.(*groth16bn254.VerifyingKey)
 

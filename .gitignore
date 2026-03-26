@@ -1,0 +1,3 @@
+target/
+circuit/setup/pk.bin
+circuit/setup/vk_new.rs

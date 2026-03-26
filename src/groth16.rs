@@ -11,16 +11,21 @@ pub struct VerificationKey {
     pub ic: &'static [G1Point],
 }
 
-/// Verify a Groth16 proof.
+/// Verify a Groth16 proof (gnark v0.10 style with one BSB22 commitment).
 ///
 /// Checks: e(A,B) · e(-α,β) · e(-vk_x,γ) · e(-C,δ) = 1
 ///
-/// public_inputs must have exactly vk.ic.len() - 1 elements,
-/// each a 32-byte big-endian scalar reduced mod the BN254 scalar field.
+/// vk_x = IC[0]
+///       + Σ(public_inputs[i] * IC[i+1])   — 56 limbs + commit_hash at [56]
+///       + commitment                        — proof.Commitments[0] added directly
+///
+/// public_inputs must have exactly vk.ic.len() - 1 elements.
+/// commitment is proof.Commitments[0] in uncompressed G1 format.
 pub fn verify(
     vk: &VerificationKey,
     proof: &Groth16Proof,
     public_inputs: &[Scalar],
+    commitment: &G1Point,
 ) -> Result<bool, ()> {
     if public_inputs.len() + 1 != vk.ic.len() {
         return Ok(false);
@@ -32,6 +37,9 @@ pub fn verify(
         let term = g1_mul(&vk.ic[i + 1], input)?;
         vk_x = g1_add(&vk_x, &term)?;
     }
+
+    // Add commitment point directly (gnark BSB22: kSum += proof.Commitments[0])
+    vk_x = g1_add(&vk_x, commitment)?;
 
     let neg_alpha = g1_negate(&vk.alpha);
     let neg_vk_x = g1_negate(&vk_x);
