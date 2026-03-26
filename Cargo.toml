@@ -1,3 +1,7 @@
+[workspace]
+members = ["."]
+resolver = "2"
+
 [package]
 name = "laurelin"
 version = "0.1.0"
