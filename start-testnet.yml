@@ -1,0 +1,28 @@
+services:
+  validator:
+    image: solanalabs/solana:stable
+    entrypoint: bash -c
+    command:
+      - |
+        solana-keygen new --no-bip39-passphrase --outfile /accounts/account1.json --force
+        solana-keygen new --no-bip39-passphrase --outfile /accounts/account2.json --force
+        solana-test-validator \
+          --ledger /ledger \
+          --bind-address 0.0.0.0 \
+          --rpc-port 8899 \
+          --faucet-port 9900 \
+          --reset &
+        until solana --url http://localhost:8899 cluster-version 2>/dev/null; do sleep 1; done
+        solana airdrop 100 $(solana-keygen pubkey /accounts/account1.json) --url http://localhost:8899
+        solana airdrop 100 $(solana-keygen pubkey /accounts/account2.json) --url http://localhost:8899
+        wait
+    ports:
+      - "8899:8899"
+      - "8900:8900"
+      - "9900:9900"
+    volumes:
+      - ledger:/ledger
+      - ./accounts:/accounts
+
+volumes:
+  ledger:

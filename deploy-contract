@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -e
+
+solana program deploy \
+  --url http://localhost:8899 \
+  --keypair accounts/account1.json \
+  target/deploy/laurelin.so
