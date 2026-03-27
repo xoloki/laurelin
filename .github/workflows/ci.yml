@@ -1,0 +1,84 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  unit:
+    name: Circuit unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: circuit/go.sum
+
+      - name: Run circuit tests (short)
+        working-directory: circuit
+        run: go test -short -timeout 300s ./...
+
+  integration:
+    name: Integration test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── Go + circuit setup ──────────────────────────────────────────────
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: circuit/go.sum
+
+      - name: Run trusted setup (generates pk.bin + src/vk_generated.rs)
+        working-directory: circuit
+        run: go run ./setup/
+
+      # ── Rust / Solana SBF toolchain ─────────────────────────────────────
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Solana install
+        id: cache-solana
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/solana
+          key: solana-v3.1.11
+
+      - name: Install Solana CLI v3.1.11
+        if: steps.cache-solana.outputs.cache-hit != 'true'
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/v3.1.11/install)"
+
+      - name: Add Solana to PATH
+        run: echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
+
+      - name: Build SBF program
+        run: cargo build-sbf
+
+      # ── Local validator + deploy ─────────────────────────────────────────
+      - name: Start solana-test-validator
+        run: |
+          solana-test-validator --quiet &
+          sleep 5
+
+      - name: Generate payer keypair + configure CLI
+        run: |
+          solana-keygen new --no-bip39-passphrase --outfile /tmp/payer.json
+          solana config set --url http://127.0.0.1:8899 --keypair /tmp/payer.json
+
+      - name: Airdrop to payer
+        run: solana airdrop 100
+
+      - name: Deploy program and capture program ID
+        run: |
+          DEPLOY_OUTPUT=$(solana program deploy target/deploy/laurelin.so)
+          echo "$DEPLOY_OUTPUT"
+          PROGRAM_ID=$(echo "$DEPLOY_OUTPUT" | grep -oP 'Program Id: \K\S+')
+          echo "PROGRAM_ID=$PROGRAM_ID" >> "$GITHUB_ENV"
+
+      - name: Run integration test
+        working-directory: circuit
+        run: go run ./cmd/client/ "$PROGRAM_ID" /tmp/payer.json
