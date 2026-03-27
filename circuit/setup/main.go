@@ -26,7 +26,7 @@ const pkPath = "setup/pk.bin"
 
 func main() {
 	fmt.Fprintln(os.Stderr, "Compiling circuit…")
-	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit.TransferCircuit{})
+	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit.RingTransferCircuit{})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "compile: %v\n", err)
 		os.Exit(1)
