@@ -80,6 +80,10 @@ func main() {
 	_, _, g1gen, _ := bn254.Generators()
 	G := g1gen
 
+	logf("Building BSGS table (range 0..2^32)…")
+	bsgs := buildBSGSTable(G)
+	logf("BSGS table ready (%d entries)", bsgsM)
+
 	randFr := func() bn254fr.Element {
 		var e bn254fr.Element
 		if _, err := e.SetRandom(); err != nil {
@@ -331,6 +335,23 @@ func main() {
 	checkField("recv1 c2", recvData1[128:192], recvDeltaC21B[:])
 
 	logf("All checks passed ✓")
+
+	// ── 12. Decrypt balances via BSGS ─────────────────────────────────────────
+	logf("Decrypting balances…")
+
+	s0C1 := g1FromBytes(senderData0[64:128])
+	s0C2 := g1FromBytes(senderData0[128:192])
+	s1C1 := g1FromBytes(senderData1[64:128])
+	s1C2 := g1FromBytes(senderData1[128:192])
+	r0C1 := g1FromBytes(recvData0[64:128])
+	r0C2 := g1FromBytes(recvData0[128:192])
+	r1C1 := g1FromBytes(recvData1[64:128])
+	r1C2 := g1FromBytes(recvData1[128:192])
+
+	checkBalance("sender0 (real)",  decryptBalance(s0C1, s0C2, sk,          &bsgs), balance-amount)
+	checkBalance("sender1 (decoy)", decryptBalance(s1C1, s1C2, decoySk,     &bsgs), balance)
+	checkBalance("recv0   (real)",  decryptBalance(r0C1, r0C2, recvSk,      &bsgs), amount)
+	checkBalance("recv1   (decoy)", decryptBalance(r1C1, r1C2, decoyRecvSk, &bsgs), 0)
 }
 
 // ── Instruction builders ──────────────────────────────────────────────────────
@@ -479,6 +500,13 @@ func mustGetAccountData(client *rpc.Client, ctx context.Context, pk solanago.Pub
 	return resp.Value.Data.GetBinary()
 }
 
+func checkBalance(label string, got, want uint32) {
+	if got != want {
+		fatalf("BALANCE MISMATCH %s: got %d, want %d", label, got, want)
+	}
+	logf("  ✓ %s balance = %d", label, got)
+}
+
 func checkField(label string, got, want []byte) {
 	for i := range want {
 		if got[i] != want[i] {
@@ -488,7 +516,7 @@ func checkField(label string, got, want []byte) {
 	logf("  ✓ %s", label)
 }
 
-// ── BN254 serialisation ───────────────────────────────────────────────────────
+// ── BN254 serialisation / BSGS helpers ───────────────────────────────────────
 
 func fpBE(x *fp.Element) [32]byte {
 	var bi big.Int
@@ -518,6 +546,29 @@ func g2Bytes(p *bn254.G2Affine) [128]byte {
 	copy(out[64:96], yc1[:])
 	copy(out[96:128], yc0[:])
 	return out
+}
+
+func g1FromBytes(b []byte) bn254.G1Affine {
+	var p bn254.G1Affine
+	p.X.SetBytes(b[:32])
+	p.Y.SetBytes(b[32:64])
+	return p
+}
+
+// decryptBalance recovers v from an ElGamal ciphertext (C1, C2) and secret key sk.
+// v·G = C2 - sk·C1; then BSGS solves for v.
+func decryptBalance(C1, C2 bn254.G1Affine, sk bn254fr.Element, t *bsgsTable) uint32 {
+	var skInt big.Int
+	sk.BigInt(&skInt)
+	var skC1 bn254.G1Affine
+	skC1.ScalarMultiplication(&C1, &skInt)
+	var vG bn254.G1Affine
+	vG.Sub(&C2, &skC1)
+	v, ok := t.solve(vG)
+	if !ok {
+		fatalf("BSGS: discrete log not found (balance out of range?)")
+	}
+	return v
 }
 
 func logf(format string, args ...any) {
