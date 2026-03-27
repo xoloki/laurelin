@@ -1,3 +1,4 @@
 target/
 circuit/setup/pk.bin
 circuit/setup/vk_new.rs
+src/vk_generated.rs
