@@ -24,7 +24,7 @@ import (
 )
 
 func main() {
-	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &xfer.TransferCircuit{})
+	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &xfer.RingTransferCircuit{})
 	if err != nil {
 		panic(err)
 	}
@@ -45,11 +45,15 @@ func main() {
 		return r
 	}
 
-	var sk, rOld, rNew, rT bn254fr.Element
+	var sk, rOld, rNew, rDecoy, rT, rRecv, decoySk, decoyRecvSk bn254fr.Element
 	sk.SetUint64(42)
 	rOld.SetUint64(100)
 	rNew.SetUint64(200)
+	rDecoy.SetUint64(777)
 	rT.SetUint64(300)
+	rRecv.SetUint64(888)
+	decoySk.SetUint64(99)
+	decoyRecvSk.SetUint64(55)
 
 	const balance, amount = uint32(1000), uint32(400)
 	var bFr, vFr, bmvFr bn254fr.Element
@@ -57,33 +61,61 @@ func main() {
 	vFr.SetUint64(uint64(amount))
 	bmvFr.SetUint64(uint64(balance - amount))
 
-	senderPk    := mul(G, sk)
-	oldC1       := mul(G, rOld)
-	oldC2       := add(mul(oldC1, sk), mul(G, bFr))
-	newSenderC1 := mul(G, rNew)
-	newSenderC2 := add(mul(newSenderC1, sk), mul(G, bmvFr))
-	transferC1  := mul(G, rT)
-	transferC2  := add(mul(senderPk, rT), mul(G, vFr))
+	realSenderPk  := mul(G, sk)
+	realOldC1     := mul(G, rOld)
+	realOldC2     := add(mul(realOldC1, sk), mul(G, bFr))
+	realNewC1     := mul(G, rNew)
+	realNewC2     := add(mul(realNewC1, sk), mul(G, bmvFr))
 
-	var skInt, rNewInt, rTInt big.Int
+	decoySenderPk  := mul(G, decoySk)
+	decoyRandFr    := bn254fr.Element{}
+	decoyRandFr.SetUint64(50)
+	decoyOldC1    := mul(G, decoyRandFr)
+	decoyOldC2    := add(mul(decoyOldC1, decoySk), mul(G, bFr))
+	decoyNewC1    := add(decoyOldC1, mul(G, rDecoy))
+	decoyNewC2    := add(decoyOldC2, mul(decoySenderPk, rDecoy))
+
+	realRecvPk    := mul(G, decoyRecvSk)
+	var decoyRecvSkFr bn254fr.Element
+	decoyRecvSkFr.SetUint64(77)
+	decoyRecvPk   := mul(G, decoyRecvSkFr)
+
+	transferC1    := mul(G, rT)
+	transferC2    := add(mul(realRecvPk, rT), mul(G, vFr))
+	decoyDeltaC1  := mul(G, rRecv)
+	decoyDeltaC2  := mul(decoyRecvPk, rRecv)
+
+	var skInt, rNewInt, rDecoyInt, rTInt, rRecvInt big.Int
 	sk.BigInt(&skInt)
 	rNew.BigInt(&rNewInt)
+	rDecoy.BigInt(&rDecoyInt)
 	rT.BigInt(&rTInt)
+	rRecv.BigInt(&rRecvInt)
 
-	w := &xfer.TransferCircuit{
-		Sk:          emulated.ValueOf[sw_bn254.ScalarField](&skInt),
-		RNew:        emulated.ValueOf[sw_bn254.ScalarField](&rNewInt),
-		RT:          emulated.ValueOf[sw_bn254.ScalarField](&rTInt),
-		B:           balance,
-		V:           amount,
-		BmV:         balance - amount,
-		SenderPk:    sw_bn254.NewG1Affine(senderPk),
-		OldC1:       sw_bn254.NewG1Affine(oldC1),
-		OldC2:       sw_bn254.NewG1Affine(oldC2),
-		NewSenderC1: sw_bn254.NewG1Affine(newSenderC1),
-		NewSenderC2: sw_bn254.NewG1Affine(newSenderC2),
-		TransferC1:  sw_bn254.NewG1Affine(transferC1),
-		TransferC2:  sw_bn254.NewG1Affine(transferC2),
+	w := &xfer.RingTransferCircuit{
+		Sk:        emulated.ValueOf[sw_bn254.ScalarField](&skInt),
+		RNew:      emulated.ValueOf[sw_bn254.ScalarField](&rNewInt),
+		RDecoy:    emulated.ValueOf[sw_bn254.ScalarField](&rDecoyInt),
+		RT:        emulated.ValueOf[sw_bn254.ScalarField](&rTInt),
+		RRecv:     emulated.ValueOf[sw_bn254.ScalarField](&rRecvInt),
+		B: balance, V: amount, BmV: balance - amount,
+		SenderIdx: 0, RecvIdx: 0,
+		SenderPk0:    sw_bn254.NewG1Affine(realSenderPk),
+		SenderPk1:    sw_bn254.NewG1Affine(decoySenderPk),
+		SenderOldC10: sw_bn254.NewG1Affine(realOldC1),
+		SenderOldC11: sw_bn254.NewG1Affine(decoyOldC1),
+		SenderOldC20: sw_bn254.NewG1Affine(realOldC2),
+		SenderOldC21: sw_bn254.NewG1Affine(decoyOldC2),
+		SenderNewC10: sw_bn254.NewG1Affine(realNewC1),
+		SenderNewC11: sw_bn254.NewG1Affine(decoyNewC1),
+		SenderNewC20: sw_bn254.NewG1Affine(realNewC2),
+		SenderNewC21: sw_bn254.NewG1Affine(decoyNewC2),
+		RecvPk0:      sw_bn254.NewG1Affine(realRecvPk),
+		RecvPk1:      sw_bn254.NewG1Affine(decoyRecvPk),
+		RecvDeltaC10: sw_bn254.NewG1Affine(transferC1),
+		RecvDeltaC20: sw_bn254.NewG1Affine(transferC2),
+		RecvDeltaC11: sw_bn254.NewG1Affine(decoyDeltaC1),
+		RecvDeltaC21: sw_bn254.NewG1Affine(decoyDeltaC2),
 	}
 
 	fullWitness, err := frontend.NewWitness(w, ecc.BN254.ScalarField())

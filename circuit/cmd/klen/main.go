@@ -11,7 +11,7 @@ import (
 	"laurelin/circuit"
 )
 func main() {
-	ccs, _ := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit.TransferCircuit{})
+	ccs, _ := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit.RingTransferCircuit{})
 	fmt.Println("NbPublicVariables:", ccs.GetNbPublicVariables())
 
 	f, _ := os.Open("setup/pk.bin")

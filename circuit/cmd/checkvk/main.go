@@ -12,7 +12,7 @@ import (
 )
 
 func main() {
-    ccs, _ := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit.TransferCircuit{})
+    ccs, _ := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit.RingTransferCircuit{})
     fmt.Fprintln(os.Stderr, "NbPublicVariables:", ccs.GetNbPublicVariables())
 
     pkFile, _ := os.Open("setup/pk.bin")

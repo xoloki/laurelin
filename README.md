@@ -16,15 +16,17 @@ C1     = r × G
 C2     = r × pk + v × G  (encrypts value v under pubkey)
 ```
 
-A transfer proves in zero-knowledge:
+A transfer uses a **2+2 ring signature**: 2 sender accounts and 2 receiver accounts are included, with only the prover knowing which are real. The proof establishes in zero-knowledge:
 
-- The sender knows `sk` such that `pk = sk × G`
-- The old ciphertext correctly encrypts the old balance `B`
-- The new sender ciphertext correctly encrypts `B − v`
-- The transfer ciphertext correctly encrypts `v`
+- The prover knows `sk` for one member of the sender ring (`pk = sk × G`)
+- That member's old ciphertext correctly encrypts balance `B`
+- That member's new ciphertext correctly encrypts `B − v`
+- The decoy sender's ciphertext is validly re-randomized (same balance, unlinkable)
+- One member of the receiver ring receives a ciphertext encrypting `v`
+- The decoy receiver's ciphertext is re-randomized (encrypts 0)
 - `0 ≤ v ≤ B < 2³²`
 
-The receiver's balance is updated homomorphically (EC addition) without decryption.
+All four accounts are updated on-chain; observers cannot determine which sender spent or which receiver received.
 
 ---
 
@@ -33,15 +35,15 @@ The receiver's balance is updated homomorphically (EC addition) without decrypti
 ```
 src/                     Rust — Solana on-chain program
   lib.rs                 Program entrypoint; REAL_VK; instruction dispatch
-  instruction.rs         Instruction parsing (CreateAccount, Transfer)
+  instruction.rs         Instruction parsing (CreateAccount, RingTransfer)
   state.rs               Account state layout; Groth16Proof type
   groth16.rs             Groth16 verifier (4-pairing check + BSB22 commitment)
   bn254.rs               BN254 primitives via Solana alt_bn128_* syscalls
   client.rs              (unused Rust client stub)
 
 circuit/                 Go — gnark Groth16 circuit and tooling
-  circuit.go             TransferCircuit constraint system (gnark v0.10)
-  circuit_test.go        Unit test for the circuit
+  circuit.go             RingTransferCircuit — 2+2 ring constraint system (gnark v0.10)
+  circuit_test.go        Unit tests for the ring circuit
 
 circuit/setup/           Trusted setup
   main.go                Compiles circuit → runs Groth16 setup → saves pk.bin
@@ -65,17 +67,17 @@ start-testnet.yml        Docker Compose for local validator (if used)
 
 ## Public input encoding
 
-gnark represents each BN254 Fp coordinate as four 64-bit limbs (little-endian). A G1 point contributes 8 Fr scalars. Seven public points × 8 = **56 scalars**.
+gnark represents each BN254 Fp coordinate as four 64-bit limbs (little-endian). A G1 point contributes 8 Fr scalars. Sixteen public points × 8 = **128 scalars**.
 
-gnark v0.10 silently adds a BSB22 commitment (used internally for limb range proofs), giving **IC length = 58**:
+gnark v0.10 silently adds a BSB22 commitment (used internally for limb range proofs), giving **IC length = 130**:
 
 | IC index | Value |
 |----------|-------|
 | 0 | constant wire 1 (unconditional) |
-| 1–56 | limbs of SenderPk, OldC1, OldC2, NewSenderC1, NewSenderC2, TransferC1, TransferC2 |
-| 57 | BSB22 commitment hash |
+| 1–128 | limbs of SenderPk0, SenderPk1, SenderOldC10, SenderOldC11, SenderOldC20, SenderOldC21, SenderNewC10, SenderNewC11, SenderNewC20, SenderNewC21, RecvPk0, RecvPk1, RecvDeltaC10, RecvDeltaC20, RecvDeltaC11, RecvDeltaC21 |
+| 129 | BSB22 commitment hash |
 
-The commitment hash is `ExpandMsgXMD(SHA-256, commitment_bytes ∥ limb_0..55, "bsb22-commitment", 48)` reduced mod the BN254 scalar field. It is computed in Go and passed in the instruction; `proof.Commitments[0]` is added directly to `vk_x` before the pairing check.
+The commitment hash is `ExpandMsgXMD(SHA-256, commitment_bytes ∥ limb_0..127, "bsb22-commitment", 48)` reduced mod the BN254 scalar field. It is computed in Go and passed in the instruction; `proof.Commitments[0]` is added directly to `vk_x` before the pairing check.
 
 ---
 
@@ -113,14 +115,18 @@ cd circuit
 go run ./cmd/client <PROGRAM_ID>
 ```
 
-This generates a fresh proof, submits CreateAccount (sender balance = 1000) + CreateAccount (receiver, zero) + Transfer (amount = 400) to the local validator, then verifies the on-chain ciphertext updates.
+This generates a fresh ring proof, submits 4× CreateAccount (2 senders, 2 receivers) + RingTransfer (amount = 400) to the local validator, then verifies all four on-chain ciphertext updates.
 
 Expected output ends with:
 ```
-  ✓ sender c1
-  ✓ sender c2
-  ✓ recv c1
-  ✓ recv c2
+  ✓ sender0 c1
+  ✓ sender0 c2
+  ✓ sender1 c1
+  ✓ sender1 c2
+  ✓ recv0 c1
+  ✓ recv0 c2
+  ✓ recv1 c1
+  ✓ recv1 c2
 All checks passed ✓
 ```
 
@@ -141,7 +147,7 @@ Accounts: `[payer (write, signer), pda (write), system_program]`
 
 PDA seed: first 32 bytes of `pubkey` (the X coordinate).
 
-### `Transfer` (opcode 1)
+### `RingTransfer` (opcode 1)
 
 | Field | Bytes | Description |
 |-------|-------|-------------|
@@ -151,11 +157,17 @@ PDA seed: first 32 bytes of `pubkey` (the X coordinate).
 | proof.C | 64 | Groth16 proof C (G1, x ∥ y) |
 | commitment | 64 | gnark BSB22 commitment point (G1, x ∥ y) |
 | commit_hash | 32 | BSB22 hash scalar (big-endian Fr element) |
-| new_sender_c1 | 64 | Updated sender ciphertext C1 |
-| new_sender_c2 | 64 | Updated sender ciphertext C2 |
-| transfer_c1 | 64 | Transfer delta ciphertext C1 |
-| transfer_c2 | 64 | Transfer delta ciphertext C2 |
+| sender_new_c1[0] | 64 | New ciphertext C1 for sender ring member 0 |
+| sender_new_c2[0] | 64 | New ciphertext C2 for sender ring member 0 |
+| sender_new_c1[1] | 64 | New ciphertext C1 for sender ring member 1 |
+| sender_new_c2[1] | 64 | New ciphertext C2 for sender ring member 1 |
+| recv_delta_c1[0] | 64 | Delta ciphertext C1 for receiver ring member 0 |
+| recv_delta_c2[0] | 64 | Delta ciphertext C2 for receiver ring member 0 |
+| recv_delta_c1[1] | 64 | Delta ciphertext C1 for receiver ring member 1 |
+| recv_delta_c2[1] | 64 | Delta ciphertext C2 for receiver ring member 1 |
 
-Total: 609 bytes. Requires `SetComputeUnitLimit(1_400_000)` prepended in the transaction.
+Total: 865 bytes. Requires `SetComputeUnitLimit(1_400_000)` prepended in the transaction.
 
-Accounts: `[sender_pda (write), receiver_pda (write)]`
+Accounts: `[senderPDA0 (write), senderPDA1 (write), recvPDA0 (write), recvPDA1 (write)]`
+
+The proof hides which sender account is the real spender and which receiver gets the value. The decoy sender's ciphertext is re-randomized (same balance, unlinkable); the decoy receiver gets a zero-value re-encryption.
