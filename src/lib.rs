@@ -4,6 +4,10 @@
 extern crate alloc;
 #[cfg(not(test))]
 use alloc::format;
+#[cfg(not(test))]
+use alloc::vec::Vec;
+#[cfg(test)]
+use std::vec::Vec;
 
 pub mod bn254;
 pub mod groth16;
@@ -51,7 +55,17 @@ pub const GENERATOR: G1Point = {
     g
 };
 
+#[cfg(not(test))]
 include!("vk_generated.rs");
+
+#[cfg(test)]
+static REAL_VK: VerificationKey = VerificationKey {
+    alpha: [0u8; 64],
+    beta:  [0u8; 128],
+    gamma: [0u8; 128],
+    delta: [0u8; 128],
+    ic:    &[],
+};
 
 pub fn process_instruction(
     program_id: &Pubkey,
@@ -231,8 +245,8 @@ fn build_ring_public_inputs(
     recv_delta_c1: &[G1Point; 2],
     recv_delta_c2: &[G1Point; 2],
     commit_hash: &state::Scalar,
-) -> alloc::vec::Vec<state::Scalar> {
-    let mut inputs = alloc::vec::Vec::with_capacity(129);
+) -> Vec<state::Scalar> {
+    let mut inputs = Vec::with_capacity(129);
 
     let points: [&G1Point; 16] = [
         &sender_state[0].pubkey, &sender_state[1].pubkey,
@@ -258,4 +272,118 @@ fn build_ring_public_inputs(
     }
     inputs.push(*commit_hash);
     inputs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_point(x_lsb: u8) -> state::G1Point {
+        let mut p = [0u8; 64];
+        p[31] = x_lsb;
+        p
+    }
+
+    fn make_state(pk: u8, c1: u8, c2: u8) -> state::AccountState {
+        state::AccountState { pubkey: make_point(pk), c1: make_point(c1), c2: make_point(c2) }
+    }
+
+    #[test]
+    fn public_inputs_count() {
+        let z = [0u8; 64];
+        let sender = [make_state(0, 0, 0), make_state(0, 0, 0)];
+        let recv   = [make_state(0, 0, 0), make_state(0, 0, 0)];
+        let inputs = build_ring_public_inputs(
+            &sender, &recv, &[z; 2], &[z; 2], &[z; 2], &[z; 2], &[0u8; 32],
+        );
+        assert_eq!(inputs.len(), 129);
+    }
+
+    #[test]
+    fn commit_hash_is_last() {
+        let z = [0u8; 64];
+        let sender = [make_state(0, 0, 0), make_state(0, 0, 0)];
+        let recv   = [make_state(0, 0, 0), make_state(0, 0, 0)];
+        let mut commit_hash = [0u8; 32];
+        commit_hash[31] = 0xAB;
+        let inputs = build_ring_public_inputs(
+            &sender, &recv, &[z; 2], &[z; 2], &[z; 2], &[z; 2], &commit_hash,
+        );
+        assert_eq!(inputs[128], commit_hash);
+    }
+
+    // A coordinate with only byte[31] set maps to limb 0 (byte_off = 24).
+    #[test]
+    fn limb_decomposition_lsb() {
+        let z = [0u8; 64];
+        let mut pk = [0u8; 64];
+        pk[31] = 0xAB;
+        let sender = [
+            state::AccountState { pubkey: pk, c1: z, c2: z },
+            make_state(0, 0, 0),
+        ];
+        let recv = [make_state(0, 0, 0), make_state(0, 0, 0)];
+        let inputs = build_ring_public_inputs(
+            &sender, &recv, &[z; 2], &[z; 2], &[z; 2], &[z; 2], &[0u8; 32],
+        );
+        // sender_state[0].pubkey = point index 0 → scalar index 0 = limb 0 of X
+        assert_eq!(inputs[0][31], 0xAB, "LSB should be in limb 0");
+        assert_eq!(inputs[1], [0u8; 32], "limb 1 should be zero");
+        assert_eq!(inputs[2], [0u8; 32], "limb 2 should be zero");
+        assert_eq!(inputs[3], [0u8; 32], "limb 3 should be zero");
+    }
+
+    // A coordinate with only byte[0] set maps to limb 3 (byte_off = 0), at position [24].
+    #[test]
+    fn limb_decomposition_msb() {
+        let z = [0u8; 64];
+        let mut pk = [0u8; 64];
+        pk[0] = 0xCD; // most significant byte
+        let sender = [
+            state::AccountState { pubkey: pk, c1: z, c2: z },
+            make_state(0, 0, 0),
+        ];
+        let recv = [make_state(0, 0, 0), make_state(0, 0, 0)];
+        let inputs = build_ring_public_inputs(
+            &sender, &recv, &[z; 2], &[z; 2], &[z; 2], &[z; 2], &[0u8; 32],
+        );
+        assert_eq!(inputs[3][24], 0xCD, "MSB should be in limb 3 at byte [24]");
+        assert_eq!(inputs[0], [0u8; 32], "limb 0 should be zero");
+        assert_eq!(inputs[1], [0u8; 32], "limb 1 should be zero");
+        assert_eq!(inputs[2], [0u8; 32], "limb 2 should be zero");
+    }
+
+    // Verify the 16 G1 points appear in declaration order.
+    // Point order: sender_pk[0,1], sender_old_c1[0,1], sender_old_c2[0,1],
+    //              sender_new_c1[0,1], sender_new_c2[0,1], recv_pk[0,1],
+    //              recv_delta_c1[0], recv_delta_c2[0], recv_delta_c1[1], recv_delta_c2[1]
+    #[test]
+    fn point_ordering() {
+        let z = [0u8; 64];
+        // Give each of the 16 points a unique marker in X[31]
+        let mut pts = [[0u8; 64]; 16];
+        for i in 0..16usize { pts[i][31] = (i + 1) as u8; }
+
+        let sender = [
+            state::AccountState { pubkey: pts[0], c1: pts[2], c2: pts[4] },
+            state::AccountState { pubkey: pts[1], c1: pts[3], c2: pts[5] },
+        ];
+        let recv = [
+            state::AccountState { pubkey: pts[10], c1: z, c2: z },
+            state::AccountState { pubkey: pts[11], c1: z, c2: z },
+        ];
+        let inputs = build_ring_public_inputs(
+            &sender, &recv,
+            &[pts[6], pts[7]], &[pts[8], pts[9]],
+            &[pts[12], pts[14]], &[pts[13], pts[15]],
+            &[0u8; 32],
+        );
+        // Each point i contributes 8 scalars; limb 0 of X is at inputs[i*8]
+        for i in 0..16usize {
+            assert_eq!(
+                inputs[i * 8][31], (i + 1) as u8,
+                "point {} should have marker {} at limb 0 of X", i, i + 1
+            );
+        }
+    }
 }

@@ -56,3 +56,51 @@ impl Groth16Proof {
         Some(Self { a, b, c })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn account_state_round_trip() {
+        let mut data = [0u8; 192];
+        for i in 0..192 { data[i] = i as u8; }
+        let state = AccountState::try_from_bytes(&data).unwrap();
+        assert_eq!(&state.pubkey[..], &data[0..64]);
+        assert_eq!(&state.c1[..], &data[64..128]);
+        assert_eq!(&state.c2[..], &data[128..192]);
+        let mut out = [0u8; 192];
+        state.write_to(&mut out);
+        assert_eq!(data, out);
+    }
+
+    #[test]
+    fn account_state_too_short() {
+        assert!(AccountState::try_from_bytes(&[0u8; 191]).is_none());
+    }
+
+    #[test]
+    fn account_state_exact_length() {
+        assert!(AccountState::try_from_bytes(&[0u8; 192]).is_some());
+    }
+
+    #[test]
+    fn groth16_proof_round_trip() {
+        let mut data = [0u8; 256];
+        for i in 0..256 { data[i] = i as u8; }
+        let proof = Groth16Proof::try_from_bytes(&data).unwrap();
+        assert_eq!(&proof.a[..], &data[0..64]);
+        assert_eq!(&proof.b[..], &data[64..192]);
+        assert_eq!(&proof.c[..], &data[192..256]);
+    }
+
+    #[test]
+    fn groth16_proof_too_short() {
+        assert!(Groth16Proof::try_from_bytes(&[0u8; 255]).is_none());
+    }
+
+    #[test]
+    fn groth16_proof_exact_length() {
+        assert!(Groth16Proof::try_from_bytes(&[0u8; 256]).is_some());
+    }
+}
