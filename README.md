@@ -34,12 +34,13 @@ All four accounts are updated on-chain; observers cannot determine which sender 
 
 ```
 src/                     Rust — Solana on-chain program
-  lib.rs                 Program entrypoint; REAL_VK; instruction dispatch
+  lib.rs                 Program entrypoint; include!(vk_generated.rs); instruction dispatch
   instruction.rs         Instruction parsing (CreateAccount, RingTransfer)
   state.rs               Account state layout; Groth16Proof type
   groth16.rs             Groth16 verifier (4-pairing check + BSB22 commitment)
   bn254.rs               BN254 primitives via Solana alt_bn128_* syscalls
-  client.rs              (unused Rust client stub)
+  vk_generated.rs        Auto-generated verification key (gitignored; see setup below)
+build.rs                 Generates a stub vk_generated.rs if absent (for cargo test)
 
 circuit/                 Go — gnark Groth16 circuit and tooling
   circuit.go             RingTransferCircuit — 2+2 ring constraint system (gnark v0.10)
@@ -47,20 +48,24 @@ circuit/                 Go — gnark Groth16 circuit and tooling
 
 circuit/setup/           Trusted setup
   main.go                Compiles circuit → runs Groth16 setup → saves pk.bin
-                         and prints VerificationKey as Rust source
+                         and writes src/vk_generated.rs
 
 circuit/cmd/client/      Integration test client
-  main.go                Generates a proof, submits CreateAccount + Transfer
-                         to a local Solana validator, verifies account state
+  main.go                Generates a proof, submits CreateAccount + RingTransfer
+                         to a local Solana validator, verifies account state and
+                         decrypts balances via BSGS
+  bsgs.go                Baby-step giant-step discrete log solver (range 0..2^32)
 
 circuit/cmd/klen/        Diagnostic: print NbPublicVariables and K length
 circuit/cmd/pubinputs/   Diagnostic: print all gnark public inputs and verify
                          they match the Rust limb decomposition
 
+.github/workflows/ci.yml CI: unit tests (Go + Rust) + full integration test
+
 accounts/                Solana keypair JSON files for local testing
 ledger/                  Local validator ledger data
 deploy-contract          Shell script: solana program deploy
-start-testnet.yml        Docker Compose for local validator (if used)
+start-testnet.yml        Docker Compose for local validator
 ```
 
 ---
@@ -94,11 +99,10 @@ The commitment hash is `ExpandMsgXMD(SHA-256, commitment_bytes ∥ limb_0..127, 
 
 ```bash
 cd circuit
-go run ./setup 2>/dev/null > setup/vk_new.rs
-# Paste the printed Rust block into src/lib.rs replacing REAL_VK.
+go run ./setup
 ```
 
-This saves `circuit/setup/pk.bin` (proving key) and prints the verification key as a Rust static.
+This saves `circuit/setup/pk.bin` (proving key) and writes `src/vk_generated.rs` (verification key), which is `include!`-ed by `src/lib.rs` at compile time.
 
 ### 2. Build and deploy the Solana program
 
@@ -108,14 +112,24 @@ cargo build-sbf
 # Prints: Program Id: <PROGRAM_ID>
 ```
 
-### 3. Run the integration test
+### 3. Run unit tests
+
+```bash
+# Rust unit tests (no setup required — build.rs generates a stub vk_generated.rs)
+cargo test
+
+# Go circuit tests
+cd circuit && go test -short ./...
+```
+
+### 4. Run the integration test
 
 ```bash
 cd circuit
-go run ./cmd/client <PROGRAM_ID>
+go run ./cmd/client <PROGRAM_ID> [payer-keypair.json]
 ```
 
-This generates a fresh ring proof, submits 4× CreateAccount (2 senders, 2 receivers) + RingTransfer (amount = 400) to the local validator, then verifies all four on-chain ciphertext updates.
+This generates a fresh ring proof, submits 4× CreateAccount (2 senders, 2 receivers) + RingTransfer (amount = 400) to the local validator, verifies all four on-chain ciphertext updates, and decrypts the resulting balances via BSGS. The payer keypair defaults to `../accounts/account1.json`.
 
 Expected output ends with:
 ```
@@ -128,6 +142,11 @@ Expected output ends with:
   ✓ recv1 c1
   ✓ recv1 c2
 All checks passed ✓
+Decrypting balances…
+  ✓ sender0 (real)  balance = 600
+  ✓ sender1 (decoy) balance = 1000
+  ✓ recv0   (real)  balance = 400
+  ✓ recv1   (decoy) balance = 0
 ```
 
 ---
