@@ -11,7 +11,7 @@ concurrency:
 
 jobs:
   unit:
-    name: Circuit unit tests
+    name: Unit tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,6 +24,11 @@ jobs:
       - name: Run circuit tests (short)
         working-directory: circuit
         run: go test -short -timeout 300s ./...
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Run Rust unit tests
+        run: cargo test
 
   integration:
     name: Integration test

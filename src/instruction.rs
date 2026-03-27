@@ -92,3 +92,82 @@ impl LaurelinInstruction {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_returns_none() {
+        assert!(LaurelinInstruction::try_from_bytes(&[]).is_none());
+    }
+
+    #[test]
+    fn unknown_opcode_returns_none() {
+        assert!(LaurelinInstruction::try_from_bytes(&[42u8; 300]).is_none());
+    }
+
+    #[test]
+    fn create_account_parses_correctly() {
+        let mut data = [0u8; 193];
+        data[0] = 0;
+        for i in 1..193 { data[i] = i as u8; }
+        match LaurelinInstruction::try_from_bytes(&data).unwrap() {
+            LaurelinInstruction::CreateAccount { pubkey, c1, c2 } => {
+                assert_eq!(&pubkey[..], &data[1..65]);
+                assert_eq!(&c1[..], &data[65..129]);
+                assert_eq!(&c2[..], &data[129..193]);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn create_account_too_short_returns_none() {
+        // opcode byte + 191 payload = 192 total; need 193
+        let mut data = [0u8; 192];
+        data[0] = 0;
+        assert!(LaurelinInstruction::try_from_bytes(&data).is_none());
+    }
+
+    #[test]
+    fn ring_transfer_parses_correctly() {
+        let mut data = [0u8; 865];
+        data[0] = 1;
+        for i in 1..865 { data[i] = (i % 251) as u8; }
+        match LaurelinInstruction::try_from_bytes(&data).unwrap() {
+            LaurelinInstruction::RingTransfer {
+                proof, commitment, commit_hash,
+                sender_new_c1, sender_new_c2,
+                recv_delta_c1, recv_delta_c2,
+            } => {
+                // proof: rest[0..256] = data[1..257]
+                assert_eq!(&proof.a[..], &data[1..65]);
+                assert_eq!(&proof.b[..], &data[65..193]);
+                assert_eq!(&proof.c[..], &data[193..257]);
+                // commitment: rest[256..320] = data[257..321]
+                assert_eq!(&commitment[..], &data[257..321]);
+                // commit_hash: rest[320..352] = data[321..353]
+                assert_eq!(&commit_hash[..], &data[321..353]);
+                // ciphertexts: rest[352..] = data[353..]
+                assert_eq!(&sender_new_c1[0][..], &data[353..417]);
+                assert_eq!(&sender_new_c2[0][..], &data[417..481]);
+                assert_eq!(&sender_new_c1[1][..], &data[481..545]);
+                assert_eq!(&sender_new_c2[1][..], &data[545..609]);
+                assert_eq!(&recv_delta_c1[0][..], &data[609..673]);
+                assert_eq!(&recv_delta_c2[0][..], &data[673..737]);
+                assert_eq!(&recv_delta_c1[1][..], &data[737..801]);
+                assert_eq!(&recv_delta_c2[1][..], &data[801..865]);
+            }
+            _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn ring_transfer_too_short_returns_none() {
+        // opcode byte + 863 payload = 864 total; need 865
+        let mut data = [0u8; 864];
+        data[0] = 1;
+        assert!(LaurelinInstruction::try_from_bytes(&data).is_none());
+    }
+}

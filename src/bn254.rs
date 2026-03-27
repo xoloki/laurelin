@@ -64,6 +64,56 @@ pub fn g1_mul(point: &G1Point, scalar: &[u8; 32]) -> Result<G1Point, ()> {
         .map_err(|_| ())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn negate_identity_returns_identity() {
+        let identity = [0u8; 64];
+        assert_eq!(g1_negate(&identity), identity);
+    }
+
+    #[test]
+    fn negate_preserves_x() {
+        let mut point = [0u8; 64];
+        point[31] = 0x01; // X = 1
+        point[63] = 0x05; // Y = 5
+        let neg = g1_negate(&point);
+        assert_eq!(&neg[0..32], &point[0..32], "X should be unchanged");
+    }
+
+    #[test]
+    fn negate_y_no_borrow() {
+        // Y = 5 (last byte only), so p - Y has last byte = FIELD_PRIME[31] - 5 = 0x47 - 5 = 0x42
+        // and all other bytes equal to FIELD_PRIME
+        let mut point = [0u8; 64];
+        point[31] = 0x01; // X = 1
+        point[63] = 0x05; // Y = 5
+        let neg = g1_negate(&point);
+        assert_eq!(neg[63], 0x47 - 0x05, "last byte of -Y");
+        // All bytes of -Y except the last should equal FIELD_PRIME
+        let field_prime: [u8; 32] = [
+            0x30, 0x64, 0x4e, 0x72, 0xe1, 0x31, 0xa0, 0x29,
+            0xb8, 0x50, 0x45, 0xb6, 0x81, 0x81, 0x58, 0x5d,
+            0x97, 0x81, 0x6a, 0x91, 0x68, 0x71, 0xca, 0x8d,
+            0x3c, 0x20, 0x8c, 0x16, 0xd8, 0x7c, 0xfd, 0x47,
+        ];
+        assert_eq!(&neg[32..63], &field_prime[0..31], "upper bytes of -Y should equal p");
+    }
+
+    #[test]
+    fn double_negate_is_identity_for_y() {
+        // negating twice should give back the original Y
+        let mut point = [0u8; 64];
+        point[31] = 0x01;
+        point[63] = 0x05;
+        let neg = g1_negate(&point);
+        let neg_neg = g1_negate(&neg);
+        assert_eq!(neg_neg, point);
+    }
+}
+
 /// Check that the product of pairings equals 1 in GT.
 /// pairs: slice of (G1, G2). G2 uses EIP-197 encoding: x_c1||x_c0||y_c1||y_c0.
 pub fn pairing_check(pairs: &[(&G1Point, &G2Point)]) -> Result<bool, ()> {
