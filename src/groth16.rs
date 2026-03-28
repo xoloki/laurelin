@@ -1,5 +1,7 @@
 use crate::bn254::{g1_add, g1_mul, g1_negate, pairing_check};
 use crate::state::{G1Point, G2Point, Groth16Proof, Scalar};
+use solana_program::log::sol_log_compute_units;
+use solana_program::msg;
 
 pub struct VerificationKey {
     pub alpha: G1Point,
@@ -32,23 +34,32 @@ pub fn verify(
     }
 
     // vk_x = IC[0] + Σ(pub_inputs[i] * IC[i+1])
+    msg!("groth16: starting g1_mul loop");
+    sol_log_compute_units();
     let mut vk_x = vk.ic[0];
     for (i, input) in public_inputs.iter().enumerate() {
         let term = g1_mul(&vk.ic[i + 1], input)?;
         vk_x = g1_add(&vk_x, &term)?;
     }
+    msg!("groth16: g1_mul loop done");
+    sol_log_compute_units();
 
     // Add commitment point directly (gnark BSB22: kSum += proof.Commitments[0])
     vk_x = g1_add(&vk_x, commitment)?;
+    msg!("groth16: commitment added, starting pairing check");
+    sol_log_compute_units();
 
     let neg_alpha = g1_negate(&vk.alpha);
     let neg_vk_x = g1_negate(&vk_x);
     let neg_c = g1_negate(&proof.c);
 
-    pairing_check(&[
+    let result = pairing_check(&[
         (&proof.a,   &proof.b),
         (&neg_alpha, &vk.beta),
         (&neg_vk_x,  &vk.gamma),
         (&neg_c,     &vk.delta),
-    ])
+    ]);
+    msg!("groth16: pairing check done");
+    sol_log_compute_units();
+    result
 }

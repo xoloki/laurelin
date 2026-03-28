@@ -1,7 +1,13 @@
 #!/usr/bin/env bash
 set -e
 
-solana program deploy \
+OUTPUT=$(solana program deploy \
   --url http://localhost:8899 \
   --keypair accounts/account1.json \
-  target/deploy/laurelin.so
+  target/deploy/laurelin.so)
+
+echo "$OUTPUT"
+
+PROGRAM_ID=$(echo "$OUTPUT" | awk '/Program Id:/ {print $3}')
+echo "PROGRAM_ID=$PROGRAM_ID" > circuit/local.env
+echo "Wrote circuit/local.env"

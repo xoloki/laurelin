@@ -6,14 +6,18 @@
 //
 // Must be run from the circuit/ directory:
 //
-//	cd circuit && go run ./cmd/client <PROGRAM_ID> [payer-keypair.json]
+//	cd circuit && go run ./cmd/client [PROGRAM_ID] [payer-keypair.json]
+//
+// If PROGRAM_ID is omitted, it is read from local.env.
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"math/big"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/consensys/gnark-crypto/ecc"
@@ -40,11 +44,43 @@ const (
 	rpcURL = "http://localhost:8899"
 )
 
-func main() {
-	if len(os.Args) < 2 {
-		fatalf("usage: client <PROGRAM_ID> [payer-keypair.json]")
+func readLocalEnv() map[string]string {
+	env := make(map[string]string)
+	f, err := os.Open("local.env")
+	if err != nil {
+		return env
 	}
-	programID := solanago.MustPublicKeyFromBase58(os.Args[1])
+	defer f.Close()
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		parts := strings.SplitN(scanner.Text(), "=", 2)
+		if len(parts) == 2 {
+			env[strings.TrimSpace(parts[0])] = strings.TrimSpace(parts[1])
+		}
+	}
+	return env
+}
+
+func writeLocalEnv(programID, sig string) {
+	content := fmt.Sprintf("PROGRAM_ID=%s\nRING_TRANSFER_SIG=%s\n", programID, sig)
+	if err := os.WriteFile("local.env", []byte(content), 0644); err != nil {
+		logf("warning: could not write local.env: %v", err)
+	}
+}
+
+func main() {
+	localEnv := readLocalEnv()
+
+	var programIDStr string
+	if len(os.Args) >= 2 {
+		programIDStr = os.Args[1]
+	} else if id, ok := localEnv["PROGRAM_ID"]; ok {
+		programIDStr = id
+		logf("Using PROGRAM_ID from local.env: %s", programIDStr)
+	} else {
+		fatalf("usage: client [PROGRAM_ID] [payer-keypair.json]  (or set PROGRAM_ID in local.env)")
+	}
+	programID := solanago.MustPublicKeyFromBase58(programIDStr)
 
 	payerPath := "../accounts/account1.json"
 	if len(os.Args) >= 3 {
@@ -296,7 +332,7 @@ func main() {
 
 	// ── 10. Ring Transfer ─────────────────────────────────────────────────────
 	logf("Sending ring transfer (amount=%d)…", amount)
-	sendAndConfirm(client, payer,
+	ringTransferSig := sendAndConfirm(client, payer,
 		ixSetComputeUnitLimit(1_400_000),
 		ixRingTransfer(
 			programID,
@@ -309,6 +345,9 @@ func main() {
 			recvDeltaC10B, recvDeltaC20B,
 			recvDeltaC11B, recvDeltaC21B,
 		))
+
+	logComputeUnits(client, ringTransferSig)
+	writeLocalEnv(programIDStr, ringTransferSig.String())
 
 	// ── 11. Verify on-chain state ─────────────────────────────────────────────
 	logf("Verifying on-chain account state…")
@@ -438,7 +477,7 @@ func ixSetComputeUnitLimit(units uint32) solanago.Instruction {
 	}
 }
 
-func sendAndConfirm(client *rpc.Client, payer solanago.PrivateKey, ixs ...solanago.Instruction) {
+func sendAndConfirm(client *rpc.Client, payer solanago.PrivateKey, ixs ...solanago.Instruction) solanago.Signature {
 	ctx := context.Background()
 	bh, err := client.GetLatestBlockhash(ctx, rpc.CommitmentFinalized)
 	if err != nil {
@@ -469,6 +508,21 @@ func sendAndConfirm(client *rpc.Client, payer solanago.PrivateKey, ixs ...solana
 	}
 	logf("  sig: %s", sig)
 	awaitConfirmed(client, sig)
+	return sig
+}
+
+func logComputeUnits(client *rpc.Client, sig solanago.Signature) {
+	ctx := context.Background()
+	maxVersion := uint64(0)
+	resp, err := client.GetTransaction(ctx, sig, &rpc.GetTransactionOpts{
+		Commitment:                     rpc.CommitmentConfirmed,
+		MaxSupportedTransactionVersion: &maxVersion,
+	})
+	if err != nil || resp == nil || resp.Meta == nil || resp.Meta.ComputeUnitsConsumed == nil {
+		logf("  compute units: (unavailable)")
+		return
+	}
+	logf("  compute units: %d / 1,400,000", *resp.Meta.ComputeUnitsConsumed)
 }
 
 func awaitConfirmed(client *rpc.Client, sig solanago.Signature) {
