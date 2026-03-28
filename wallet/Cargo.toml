@@ -1,0 +1,25 @@
+[package]
+name = "laurelin-wallet"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "laurelin-wallet"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+hex = "0.4"
+rand = "0.8"
+ark-bn254 = "0.4"
+ark-ff = "0.4"
+ark-ec = "0.4"
+ark-std = { version = "0.4", features = ["std"] }
+solana-client = "=1.18"
+solana-sdk = "=1.18"
+dirs = "5"
+bs58 = "0.5"
+zeroize = "1.3"
