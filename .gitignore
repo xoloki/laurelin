@@ -1,6 +1,8 @@
 target/
-circuit/setup/pk.bin
+circuit/setup/*.bin
 circuit/setup/vk_new.rs
-src/vk_generated.rs
+src/*vk_generated.rs
 circuit/client
 circuit/local.env
+accounts/
+ledger/
