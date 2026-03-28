@@ -22,7 +22,7 @@ use solana_program::{
     pubkey::Pubkey,
     rent::Rent,
     system_instruction,
-    program::invoke_signed,
+    program::{invoke, invoke_signed},
     sysvar::Sysvar,
 };
 
@@ -34,6 +34,8 @@ use state::{AccountState, G1Point};
 use solana_program::entrypoint;
 #[cfg(not(test))]
 entrypoint!(process_instruction);
+
+pub const VAULT_SEED: &[u8] = b"vault";
 
 // BN254 G1 generator
 pub const G1_X: [u8; 32] = {
@@ -56,10 +58,30 @@ pub const GENERATOR: G1Point = {
 };
 
 #[cfg(not(test))]
-include!("vk_generated.rs");
+include!("transfer_vk_generated.rs");
+#[cfg(not(test))]
+include!("deposit_vk_generated.rs");
+#[cfg(not(test))]
+include!("withdraw_vk_generated.rs");
 
 #[cfg(test)]
-static REAL_VK: VerificationKey = VerificationKey {
+static TRANSFER_VK: VerificationKey = VerificationKey {
+    alpha: [0u8; 64],
+    beta:  [0u8; 128],
+    gamma: [0u8; 128],
+    delta: [0u8; 128],
+    ic:    &[],
+};
+#[cfg(test)]
+static DEPOSIT_VK: VerificationKey = VerificationKey {
+    alpha: [0u8; 64],
+    beta:  [0u8; 128],
+    gamma: [0u8; 128],
+    delta: [0u8; 128],
+    ic:    &[],
+};
+#[cfg(test)]
+static WITHDRAW_VK: VerificationKey = VerificationKey {
     alpha: [0u8; 64],
     beta:  [0u8; 128],
     gamma: [0u8; 128],
@@ -98,6 +120,22 @@ pub fn process_instruction(
             recv_delta_c1,
             recv_delta_c2,
         ),
+        LaurelinInstruction::Deposit {
+            proof,
+            commitment,
+            commit_hash,
+            delta_c1,
+            delta_c2,
+            amount,
+        } => process_deposit(program_id, accounts, proof, commitment, commit_hash, delta_c1, delta_c2, amount),
+        LaurelinInstruction::Withdraw {
+            proof,
+            commitment,
+            commit_hash,
+            new_c1,
+            new_c2,
+            amount,
+        } => process_withdraw(program_id, accounts, proof, commitment, commit_hash, new_c1, new_c2, amount),
     }
 }
 
@@ -195,7 +233,7 @@ fn process_ring_transfer(
         &commit_hash,
     );
 
-    let ok = verify(&REAL_VK, &proof, &public_inputs, &commitment)
+    let ok = verify(&TRANSFER_VK, &proof, &public_inputs, &commitment)
         .map_err(|_| ProgramError::InvalidArgument)?;
     if !ok {
         msg!("balance proof invalid");
@@ -222,6 +260,228 @@ fn process_ring_transfer(
 
     msg!("ring transfer complete");
     Ok(())
+}
+
+/// Deposit: proves the delta ciphertext correctly encrypts the deposit amount
+/// under the account's public key, then transfers lamports into the vault.
+/// The vault PDA is created on first deposit if it does not yet exist.
+///
+/// accounts: [payer (write, signer), pda (write), vault_pda (write), system_program]
+fn process_deposit(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    proof: state::Groth16Proof,
+    commitment: G1Point,
+    commit_hash: state::Scalar,
+    delta_c1: G1Point,
+    delta_c2: G1Point,
+    amount: u64,
+) -> ProgramResult {
+    if accounts.len() < 4 {
+        return Err(ProgramError::NotEnoughAccountKeys);
+    }
+    let payer          = &accounts[0];
+    let pda            = &accounts[1];
+    let vault_pda      = &accounts[2];
+    let system_program = &accounts[3];
+
+    if pda.owner != program_id {
+        return Err(ProgramError::IncorrectProgramId);
+    }
+
+    let (expected_vault, bump) = Pubkey::find_program_address(&[VAULT_SEED], program_id);
+    if vault_pda.key != &expected_vault {
+        msg!("vault PDA mismatch");
+        return Err(ProgramError::InvalidArgument);
+    }
+
+    let state = AccountState::try_from_bytes(&pda.data.borrow())
+        .ok_or(ProgramError::InvalidAccountData)?;
+
+    let public_inputs = build_deposit_public_inputs(
+        &state.pubkey, &delta_c1, &delta_c2, amount, &commit_hash,
+    );
+
+    let ok = verify(&DEPOSIT_VK, &proof, &public_inputs, &commitment)
+        .map_err(|_| ProgramError::InvalidArgument)?;
+    if !ok {
+        msg!("deposit proof invalid");
+        return Err(ProgramError::InvalidArgument);
+    }
+
+    // Lazily create the vault on first deposit.
+    if vault_pda.lamports() == 0 {
+        let rent = Rent::get()?;
+        let lamports = rent.minimum_balance(0);
+        invoke_signed(
+            &system_instruction::create_account(payer.key, vault_pda.key, lamports, 0, program_id),
+            &[payer.clone(), vault_pda.clone(), system_program.clone()],
+            &[&[VAULT_SEED, &[bump]]],
+        )?;
+    }
+
+    invoke(
+        &system_instruction::transfer(payer.key, vault_pda.key, amount),
+        &[payer.clone(), vault_pda.clone(), system_program.clone()],
+    )?;
+
+    let new_c1 = bn254::g1_add(&state.c1, &delta_c1)
+        .map_err(|_| ProgramError::InvalidArgument)?;
+    let new_c2 = bn254::g1_add(&state.c2, &delta_c2)
+        .map_err(|_| ProgramError::InvalidArgument)?;
+
+    let mut data = pda.data.borrow_mut();
+    data[64..128].copy_from_slice(&new_c1);
+    data[128..192].copy_from_slice(&new_c2);
+
+    msg!("deposit complete");
+    Ok(())
+}
+
+/// Build the 26 public inputs for the deposit Groth16 proof.
+///
+/// Points in DepositCircuit declaration order (3 G1 points × 8 scalars = 24):
+///   Pk, DeltaC1, DeltaC2
+/// Plus Amount scalar at index 24, commit_hash at index 25.
+/// Total: 26 inputs, IC.len() = 27.
+fn build_deposit_public_inputs(
+    pk: &G1Point,
+    delta_c1: &G1Point,
+    delta_c2: &G1Point,
+    amount: u64,
+    commit_hash: &state::Scalar,
+) -> Vec<state::Scalar> {
+    let mut inputs = Vec::with_capacity(26);
+
+    let points: [&G1Point; 3] = [pk, delta_c1, delta_c2];
+
+    for point in &points {
+        for coord_off in [0usize, 32] {
+            let coord = &point[coord_off..coord_off + 32];
+            for limb_idx in 0..4 {
+                let byte_off = 24 - limb_idx * 8;
+                let mut limb = [0u8; 32];
+                limb[24..32].copy_from_slice(&coord[byte_off..byte_off + 8]);
+                inputs.push(limb);
+            }
+        }
+    }
+
+    let mut amount_scalar = [0u8; 32];
+    amount_scalar[24..32].copy_from_slice(&amount.to_be_bytes());
+    inputs.push(amount_scalar);
+
+    inputs.push(*commit_hash);
+    inputs
+}
+
+/// Withdraw: proves knowledge of sk and that new ciphertext correctly encrypts
+/// old_balance − amount. Lamports are paid from the shared vault.
+///
+/// accounts: [pda (write), vault_pda (write), destination (write)]
+fn process_withdraw(
+    program_id: &Pubkey,
+    accounts: &[AccountInfo],
+    proof: state::Groth16Proof,
+    commitment: G1Point,
+    commit_hash: state::Scalar,
+    new_c1: G1Point,
+    new_c2: G1Point,
+    amount: u64,
+) -> ProgramResult {
+    if accounts.len() < 3 {
+        return Err(ProgramError::NotEnoughAccountKeys);
+    }
+    let pda         = &accounts[0];
+    let vault_pda   = &accounts[1];
+    let destination = &accounts[2];
+
+    if pda.owner != program_id {
+        return Err(ProgramError::IncorrectProgramId);
+    }
+
+    let (expected_vault, _) = Pubkey::find_program_address(&[VAULT_SEED], program_id);
+    if vault_pda.key != &expected_vault {
+        msg!("vault PDA mismatch");
+        return Err(ProgramError::InvalidArgument);
+    }
+
+    let state = AccountState::try_from_bytes(&pda.data.borrow())
+        .ok_or(ProgramError::InvalidAccountData)?;
+
+    let public_inputs = build_withdraw_public_inputs(
+        &state, &new_c1, &new_c2, amount, &commit_hash,
+    );
+
+    let ok = verify(&WITHDRAW_VK, &proof, &public_inputs, &commitment)
+        .map_err(|_| ProgramError::InvalidArgument)?;
+    if !ok {
+        msg!("withdraw proof invalid");
+        return Err(ProgramError::InvalidArgument);
+    }
+
+    // Keep the vault above its rent-exempt minimum (0-data account).
+    let rent = Rent::get()?;
+    let rent_exempt = rent.minimum_balance(0);
+    let available = vault_pda.lamports().saturating_sub(rent_exempt);
+    if available < amount {
+        msg!("insufficient vault balance");
+        return Err(ProgramError::InsufficientFunds);
+    }
+
+    **vault_pda.lamports.borrow_mut()   -= amount;
+    **destination.lamports.borrow_mut() += amount;
+
+    let mut data = pda.data.borrow_mut();
+    data[64..128].copy_from_slice(&new_c1);
+    data[128..192].copy_from_slice(&new_c2);
+
+    msg!("withdraw complete");
+    Ok(())
+}
+
+/// Build the 42 public inputs for the withdraw Groth16 proof.
+///
+/// Points in WithdrawCircuit declaration order (5 G1 points × 8 scalars = 40):
+///   Pk, OldC1, OldC2, NewC1, NewC2
+/// Plus Amount scalar at index 40, commit_hash at index 41.
+/// Total: 42 inputs, IC.len() = 43.
+fn build_withdraw_public_inputs(
+    state: &AccountState,
+    new_c1: &G1Point,
+    new_c2: &G1Point,
+    amount: u64,
+    commit_hash: &state::Scalar,
+) -> Vec<state::Scalar> {
+    let mut inputs = Vec::with_capacity(42);
+
+    let points: [&G1Point; 5] = [
+        &state.pubkey,
+        &state.c1,
+        &state.c2,
+        new_c1,
+        new_c2,
+    ];
+
+    for point in &points {
+        for coord_off in [0usize, 32] {
+            let coord = &point[coord_off..coord_off + 32];
+            for limb_idx in 0..4 {
+                let byte_off = 24 - limb_idx * 8;
+                let mut limb = [0u8; 32];
+                limb[24..32].copy_from_slice(&coord[byte_off..byte_off + 8]);
+                inputs.push(limb);
+            }
+        }
+    }
+
+    // Amount as a native field element (big-endian u64 in a 32-byte scalar)
+    let mut amount_scalar = [0u8; 32];
+    amount_scalar[24..32].copy_from_slice(&amount.to_be_bytes());
+    inputs.push(amount_scalar);
+
+    inputs.push(*commit_hash);
+    inputs
 }
 
 /// Build the 129 public inputs for the ring Groth16 proof.
@@ -286,6 +546,60 @@ mod tests {
 
     fn make_state(pk: u8, c1: u8, c2: u8) -> state::AccountState {
         state::AccountState { pubkey: make_point(pk), c1: make_point(c1), c2: make_point(c2) }
+    }
+
+    #[test]
+    fn deposit_public_inputs_count() {
+        let z = [0u8; 64];
+        let inputs = build_deposit_public_inputs(&z, &z, &z, 400, &[0u8; 32]);
+        assert_eq!(inputs.len(), 26);
+    }
+
+    #[test]
+    fn deposit_commit_hash_is_last() {
+        let z = [0u8; 64];
+        let mut commit_hash = [0u8; 32];
+        commit_hash[31] = 0xAB;
+        let inputs = build_deposit_public_inputs(&z, &z, &z, 400, &commit_hash);
+        assert_eq!(inputs[25], commit_hash);
+    }
+
+    #[test]
+    fn deposit_amount_scalar_position() {
+        let z = [0u8; 64];
+        let inputs = build_deposit_public_inputs(&z, &z, &z, 400, &[0u8; 32]);
+        let mut expected = [0u8; 32];
+        expected[24..32].copy_from_slice(&400u64.to_be_bytes());
+        assert_eq!(inputs[24], expected);
+    }
+
+    #[test]
+    fn withdraw_public_inputs_count() {
+        let z = [0u8; 64];
+        let state = make_state(0, 0, 0);
+        let inputs = build_withdraw_public_inputs(&state, &z, &z, 400, &[0u8; 32]);
+        assert_eq!(inputs.len(), 42);
+    }
+
+    #[test]
+    fn withdraw_commit_hash_is_last() {
+        let z = [0u8; 64];
+        let state = make_state(0, 0, 0);
+        let mut commit_hash = [0u8; 32];
+        commit_hash[31] = 0xAB;
+        let inputs = build_withdraw_public_inputs(&state, &z, &z, 400, &commit_hash);
+        assert_eq!(inputs[41], commit_hash);
+    }
+
+    #[test]
+    fn withdraw_amount_scalar_position() {
+        let z = [0u8; 64];
+        let state = make_state(0, 0, 0);
+        let inputs = build_withdraw_public_inputs(&state, &z, &z, 400, &[0u8; 32]);
+        // 400 = 0x190; stored big-endian in [24..32]
+        let mut expected = [0u8; 32];
+        expected[24..32].copy_from_slice(&400u64.to_be_bytes());
+        assert_eq!(inputs[40], expected);
     }
 
     #[test]
