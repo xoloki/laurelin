@@ -228,6 +228,93 @@ func TestRingCircuitSatisfiableSenderIdx1(t *testing.T) {
 	}
 }
 
+func TestRingCircuitRejectsInvalidWitness(t *testing.T) {
+	skBig, _       := new(big.Int).SetString("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 16)
+	rOld, _        := new(big.Int).SetString("cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe", 16)
+	rNew, _        := new(big.Int).SetString("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef", 16)
+	rDecoy, _      := new(big.Int).SetString("aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd", 16)
+	rT, _          := new(big.Int).SetString("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", 16)
+	rRecv, _       := new(big.Int).SetString("1111222233334444111122223333444411112222333344441111222233334444", 16)
+	decoySk, _     := new(big.Int).SetString("5555666677778888555566667777888855556666777788885555666677778888", 16)
+	decoyRecvSk, _ := new(big.Int).SetString("9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa", 16)
+
+	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit.RingTransferCircuit{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+
+	_, _, g1gen, _ := bn254.Generators()
+	wrongPoint := sw_bn254.NewG1Affine(g1gen) // valid curve point but wrong value
+
+	mustFail := func(t *testing.T, w *circuit.RingTransferCircuit) {
+		t.Helper()
+		witness, err := frontend.NewWitness(w, ecc.BN254.ScalarField())
+		if err != nil {
+			t.Fatalf("witness: %v", err)
+		}
+		if err := ccs.IsSolved(witness); err == nil {
+			t.Fatal("expected circuit to reject witness, but it was satisfied")
+		}
+	}
+
+	// constraint 1: SenderPk[real] = Sk * G
+	t.Run("wrong_secret_key", func(t *testing.T) {
+		w := buildRingWitness(t, skBig, rOld, rNew, rDecoy, rT, rRecv, decoySk, decoyRecvSk, 1000, 400, 0, 0)
+		w.Sk = emulated.ValueOf[sw_bn254.ScalarField](big.NewInt(42))
+		mustFail(t, w)
+	})
+
+	// constraint 2: OldC2[real] = Sk * OldC1[real] + B * G
+	t.Run("wrong_old_balance", func(t *testing.T) {
+		w := buildRingWitness(t, skBig, rOld, rNew, rDecoy, rT, rRecv, decoySk, decoyRecvSk, 1000, 400, 0, 0)
+		w.B = 999 // OldC2 was encrypted with B=1000
+		mustFail(t, w)
+	})
+
+	// constraint 4: NewC2[real] = RNew * SenderPk[real] + BmV * G
+	t.Run("wrong_new_sender_ciphertext", func(t *testing.T) {
+		w := buildRingWitness(t, skBig, rOld, rNew, rDecoy, rT, rRecv, decoySk, decoyRecvSk, 1000, 400, 0, 0)
+		w.SenderNewC20 = wrongPoint // senderIdx=0, so slot 0 is real
+		mustFail(t, w)
+	})
+
+	// constraints 5-6: NewC1/C2[decoy] = OldC1/C2[decoy] + RDecoy * {G, pk[decoy]}
+	t.Run("decoy_sender_not_rerandomized", func(t *testing.T) {
+		w := buildRingWitness(t, skBig, rOld, rNew, rDecoy, rT, rRecv, decoySk, decoyRecvSk, 1000, 400, 0, 0)
+		w.SenderNewC21 = wrongPoint // senderIdx=0, so slot 1 is decoy
+		mustFail(t, w)
+	})
+
+	// constraints 9-10: DeltaC1/C2[decoy] = RRecv * {G, pk[decoy]}  (encrypts 0)
+	t.Run("decoy_recv_delta_nonzero", func(t *testing.T) {
+		w := buildRingWitness(t, skBig, rOld, rNew, rDecoy, rT, rRecv, decoySk, decoyRecvSk, 1000, 400, 0, 0)
+		w.RecvDeltaC21 = wrongPoint // recvIdx=0, so slot 1 is decoy
+		mustFail(t, w)
+	})
+
+	// constraint 3: B = V + BmV, plus 32-bit range checks
+	t.Run("overdraft", func(t *testing.T) {
+		w := buildRingWitness(t, skBig, rOld, rNew, rDecoy, rT, rRecv, decoySk, decoyRecvSk, 1000, 400, 0, 0)
+		w.V = 1200 // V > B: 1000 ≠ 1200 + 0
+		w.BmV = 0
+		mustFail(t, w)
+	})
+
+	// boolean assertion on SenderIdx
+	t.Run("sender_idx_not_boolean", func(t *testing.T) {
+		w := buildRingWitness(t, skBig, rOld, rNew, rDecoy, rT, rRecv, decoySk, decoyRecvSk, 1000, 400, 0, 0)
+		w.SenderIdx = 2
+		mustFail(t, w)
+	})
+
+	// boolean assertion on RecvIdx
+	t.Run("recv_idx_not_boolean", func(t *testing.T) {
+		w := buildRingWitness(t, skBig, rOld, rNew, rDecoy, rT, rRecv, decoySk, decoyRecvSk, 1000, 400, 0, 0)
+		w.RecvIdx = 2
+		mustFail(t, w)
+	})
+}
+
 func TestRingGroth16ProveVerify(t *testing.T) {
 	if testing.Short() {
 		t.Skip("skipping Groth16 prove/verify in short mode")
