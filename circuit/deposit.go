@@ -18,9 +18,9 @@
 //
 // The circuit proves:
 //
-//	1. DeltaC1 = R * G
-//	2. DeltaC2 = R * Pk + Amount * G
-//	3. Amount ∈ [0, 2³²)
+//  1. DeltaC1 = R * G
+//  2. DeltaC2 = R * Pk + Amount * G
+//  3. Amount ∈ [0, 2³²)
 package circuit
 
 import (
@@ -64,12 +64,12 @@ func (c *DepositCircuit) Define(api frontend.API) error {
 	// Compute Amount*G as (Amount+1)*G − G to avoid ScalarMulBase(0) when
 	// Amount = 0.  The scalar Amount+1 ∈ [1, 2³²] is never zero.
 	_, _, g1gen, _ := bn254.Generators()
-	gPoint         := sw_bn254.NewG1Affine(g1gen)
-	amtP1Bits      := api.ToBinary(api.Add(c.Amount, 1), 33)
-	amtP1Scalar    := scalarField.FromBits(amtP1Bits...)
-	amtP1G         := curve.ScalarMulBase(amtP1Scalar)
-	rPk            := curve.ScalarMul(&c.Pk, &c.R)
-	computedC2     := curve.Add(curve.Add(rPk, amtP1G), curve.Neg(&gPoint))
+	gPoint := sw_bn254.NewG1Affine(g1gen)
+	amtP1Bits := api.ToBinary(api.Add(c.Amount, 1), 33)
+	amtP1Scalar := scalarField.FromBits(amtP1Bits...)
+	amtP1G := curve.ScalarMulBase(amtP1Scalar)
+	rPk := curve.ScalarMul(&c.Pk, &c.R)
+	computedC2 := curve.Add(curve.Add(rPk, amtP1G), curve.Neg(&gPoint))
 	curve.AssertIsEqual(computedC2, &c.DeltaC2)
 
 	return nil

@@ -166,9 +166,9 @@ func g2Bytes(p *bn254.G2Affine) [128]byte {
 	xc1 := fpBE(&p.X.A1)
 	yc0 := fpBE(&p.Y.A0)
 	yc1 := fpBE(&p.Y.A1)
-	copy(out[0:32],   xc1[:])
-	copy(out[32:64],  xc0[:])
-	copy(out[64:96],  yc1[:])
+	copy(out[0:32], xc1[:])
+	copy(out[32:64], xc0[:])
+	copy(out[64:96], yc1[:])
 	copy(out[96:128], yc0[:])
 	return out
 }

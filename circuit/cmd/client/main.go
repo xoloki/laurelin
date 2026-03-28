@@ -1,14 +1,15 @@
 // Integration client: exercises the full Laurelin cycle on a local validator.
 //
 // Realistic 4-user test:
-//   Alice(1000), Bob(800), Carol(600), Dave(400) each deposit their initial balance.
-//   4 ring transfers cover every SenderIdx×RecvIdx combination:
-//     T1 senderIdx=0 recvIdx=0: Alice→Carol  200
-//     T2 senderIdx=0 recvIdx=1: Alice→Dave   150
-//     T3 senderIdx=1 recvIdx=0: Bob→Carol    100
-//     T4 senderIdx=1 recvIdx=1: Bob→Dave      80
-//   Expected balances after transfers: Alice=650, Bob=620, Carol=900, Dave=630.
-//   All 4 users then withdraw their full balance; final encrypted balances = 0.
+//
+//	Alice(1000), Bob(800), Carol(600), Dave(400) each deposit their initial balance.
+//	4 ring transfers cover every SenderIdx×RecvIdx combination:
+//	  T1 senderIdx=0 recvIdx=0: Alice→Carol  200
+//	  T2 senderIdx=0 recvIdx=1: Alice→Dave   150
+//	  T3 senderIdx=1 recvIdx=0: Bob→Carol    100
+//	  T4 senderIdx=1 recvIdx=1: Bob→Dave      80
+//	Expected balances after transfers: Alice=650, Bob=620, Carol=900, Dave=630.
+//	All 4 users then withdraw their full balance; final encrypted balances = 0.
 //
 // Must be run from the circuit/ directory after running `go run ./setup`:
 //
@@ -205,26 +206,26 @@ func doRingTransfer(
 	amount uint32,
 	transferCCS constraint.ConstraintSystem, transferPK groth16.ProvingKey,
 ) {
-	realSender  := senders[senderIdx]
+	realSender := senders[senderIdx]
 	decoySender := senders[1-senderIdx]
-	realRecv    := receivers[recvIdx]
-	decoyRecv   := receivers[1-recvIdx]
-	newBalance  := realSender.balance - amount
+	realRecv := receivers[recvIdx]
+	decoyRecv := receivers[1-recvIdx]
+	newBalance := realSender.balance - amount
 
-	rNew   := randFrElem()
+	rNew := randFrElem()
 	rDecoy := randFrElem()
-	rT     := randFrElem()
-	rRecv  := randFrElem()
+	rT := randFrElem()
+	rRecv := randFrElem()
 
 	// Real sender: fresh ciphertext encrypting newBalance
-	senderNewC1Real  := mulG1(G, rNew)
-	senderNewC2Real  := addG1(mulG1(realSender.bn254PK, rNew), mulG1(G, toFrElem(uint64(newBalance))))
+	senderNewC1Real := mulG1(G, rNew)
+	senderNewC2Real := addG1(mulG1(realSender.bn254PK, rNew), mulG1(G, toFrElem(uint64(newBalance))))
 	// Decoy sender: re-randomize (same balance, new blinding)
 	senderNewC1Decoy := addG1(decoySender.c1, mulG1(G, rDecoy))
 	senderNewC2Decoy := addG1(decoySender.c2, mulG1(decoySender.bn254PK, rDecoy))
 	// Real receiver: delta ciphertext encrypting amount
-	recvDeltaC1Real  := mulG1(G, rT)
-	recvDeltaC2Real  := addG1(mulG1(realRecv.bn254PK, rT), mulG1(G, toFrElem(uint64(amount))))
+	recvDeltaC1Real := mulG1(G, rT)
+	recvDeltaC2Real := addG1(mulG1(realRecv.bn254PK, rT), mulG1(G, toFrElem(uint64(amount))))
 	// Decoy receiver: zero delta (re-randomized)
 	recvDeltaC1Decoy := mulG1(G, rRecv)
 	recvDeltaC2Decoy := mulG1(decoyRecv.bn254PK, rRecv)
@@ -232,14 +233,14 @@ func doRingTransfer(
 	// Map to ring slots [0] and [1]
 	var senderNewC1, senderNewC2 [2]bn254.G1Affine
 	var recvDeltaC1, recvDeltaC2 [2]bn254.G1Affine
-	senderNewC1[senderIdx]   = senderNewC1Real
-	senderNewC2[senderIdx]   = senderNewC2Real
+	senderNewC1[senderIdx] = senderNewC1Real
+	senderNewC2[senderIdx] = senderNewC2Real
 	senderNewC1[1-senderIdx] = senderNewC1Decoy
 	senderNewC2[1-senderIdx] = senderNewC2Decoy
-	recvDeltaC1[recvIdx]     = recvDeltaC1Real
-	recvDeltaC2[recvIdx]     = recvDeltaC2Real
-	recvDeltaC1[1-recvIdx]   = recvDeltaC1Decoy
-	recvDeltaC2[1-recvIdx]   = recvDeltaC2Decoy
+	recvDeltaC1[recvIdx] = recvDeltaC1Real
+	recvDeltaC2[recvIdx] = recvDeltaC2Real
+	recvDeltaC1[1-recvIdx] = recvDeltaC1Decoy
+	recvDeltaC2[1-recvIdx] = recvDeltaC2Decoy
 
 	var skInt, rNewInt, rDecoyInt, rTInt, rRecvInt big.Int
 	realSender.bn254SK.BigInt(&skInt)
@@ -435,13 +436,13 @@ func main() {
 
 	// ── 1. Load proving keys ──────────────────────────────────────────────────
 	logf("Loading proving keys…")
-	depositPK  := loadPK(depositPKPath)
+	depositPK := loadPK(depositPKPath)
 	transferPK := loadPK(transferPKPath)
 	withdrawPK := loadPK(withdrawPKPath)
 
 	// ── 2. Compile circuits ───────────────────────────────────────────────────
 	logf("Compiling circuits…")
-	depositCCS  := compileCCS(&xfer.DepositCircuit{})
+	depositCCS := compileCCS(&xfer.DepositCircuit{})
 	transferCCS := compileCCS(&xfer.RingTransferCircuit{})
 	withdrawCCS := compileCCS(&xfer.WithdrawCircuit{})
 
@@ -452,9 +453,9 @@ func main() {
 
 	// ── 4. Create users ───────────────────────────────────────────────────────
 	alice := newUser("Alice", programID)
-	bob   := newUser("Bob",   programID)
+	bob := newUser("Bob", programID)
 	carol := newUser("Carol", programID)
-	dave  := newUser("Dave",  programID)
+	dave := newUser("Dave", programID)
 	users := []*User{alice, bob, carol, dave}
 
 	// ── 5. Derive vault PDA ───────────────────────────────────────────────────
@@ -475,34 +476,34 @@ func main() {
 
 	// ── 7. Deposit — each user deposits their initial balance ─────────────────
 	doDeposit(client, payer, programID, vaultPDA, alice, 1000, depositCCS, depositPK)
-	doDeposit(client, payer, programID, vaultPDA, bob,    800, depositCCS, depositPK)
-	doDeposit(client, payer, programID, vaultPDA, carol,  600, depositCCS, depositPK)
-	doDeposit(client, payer, programID, vaultPDA, dave,   400, depositCCS, depositPK)
+	doDeposit(client, payer, programID, vaultPDA, bob, 800, depositCCS, depositPK)
+	doDeposit(client, payer, programID, vaultPDA, carol, 600, depositCCS, depositPK)
+	doDeposit(client, payer, programID, vaultPDA, dave, 400, depositCCS, depositPK)
 
 	// ── 8. Ring transfers — all SenderIdx×RecvIdx combos ─────────────────────
 	// Sender ring: Alice(slot 0), Bob(slot 1)
 	// Receiver ring: Carol(slot 0), Dave(slot 1)
 	// Expected final: Alice=650, Bob=620, Carol=900, Dave=630
-	senders   := [2]*User{alice, bob}
+	senders := [2]*User{alice, bob}
 	receivers := [2]*User{carol, dave}
 
 	doRingTransfer(client, payer, programID, senders, receivers, 0, 0, 200, transferCCS, transferPK)
 	doRingTransfer(client, payer, programID, senders, receivers, 0, 1, 150, transferCCS, transferPK)
 	doRingTransfer(client, payer, programID, senders, receivers, 1, 0, 100, transferCCS, transferPK)
-	doRingTransfer(client, payer, programID, senders, receivers, 1, 1,  80, transferCCS, transferPK)
+	doRingTransfer(client, payer, programID, senders, receivers, 1, 1, 80, transferCCS, transferPK)
 
 	// Verify tracked balances match expected
 	logf("Verifying tracked balances after transfers…")
 	checkBalance("Alice (tracked)", alice.balance, 650)
-	checkBalance("Bob   (tracked)", bob.balance,   620)
-	checkBalance("Carol (tracked)", carol.balance,  900)
-	checkBalance("Dave  (tracked)", dave.balance,   630)
+	checkBalance("Bob   (tracked)", bob.balance, 620)
+	checkBalance("Carol (tracked)", carol.balance, 900)
+	checkBalance("Dave  (tracked)", dave.balance, 630)
 
 	// ── 9. Withdraw — each user withdraws full balance ────────────────────────
 	doWithdraw(client, payer, programID, vaultPDA, alice, alice.balance, withdrawCCS, withdrawPK)
-	doWithdraw(client, payer, programID, vaultPDA, bob,   bob.balance,   withdrawCCS, withdrawPK)
+	doWithdraw(client, payer, programID, vaultPDA, bob, bob.balance, withdrawCCS, withdrawPK)
 	doWithdraw(client, payer, programID, vaultPDA, carol, carol.balance, withdrawCCS, withdrawPK)
-	doWithdraw(client, payer, programID, vaultPDA, dave,  dave.balance,  withdrawCCS, withdrawPK)
+	doWithdraw(client, payer, programID, vaultPDA, dave, dave.balance, withdrawCCS, withdrawPK)
 
 	// ── 10. Verify final encrypted balances = 0 via BSGS ─────────────────────
 	logf("Decrypting final on-chain balances (expect all = 0)…")
@@ -553,15 +554,24 @@ func ixDeposit(
 ) solanago.Instruction {
 	data := make([]byte, 489)
 	off := 0
-	data[off] = 0x02; off++
-	copy(data[off:off+64], proofA[:]); off += 64
-	copy(data[off:off+128], proofB[:]); off += 128
-	copy(data[off:off+64], proofC[:]); off += 64
-	copy(data[off:off+64], commitment[:]); off += 64
-	copy(data[off:off+32], commitHash[:]); off += 32
-	copy(data[off:off+64], deltaC1[:]); off += 64
-	copy(data[off:off+64], deltaC2[:]); off += 64
-	binary.LittleEndian.PutUint64(data[off:off+8], amount); off += 8
+	data[off] = 0x02
+	off++
+	copy(data[off:off+64], proofA[:])
+	off += 64
+	copy(data[off:off+128], proofB[:])
+	off += 128
+	copy(data[off:off+64], proofC[:])
+	off += 64
+	copy(data[off:off+64], commitment[:])
+	off += 64
+	copy(data[off:off+32], commitHash[:])
+	off += 32
+	copy(data[off:off+64], deltaC1[:])
+	off += 64
+	copy(data[off:off+64], deltaC2[:])
+	off += 64
+	binary.LittleEndian.PutUint64(data[off:off+8], amount)
+	off += 8
 	if off != 489 {
 		panic(fmt.Sprintf("ixDeposit: expected 489 bytes, got %d", off))
 	}
@@ -597,20 +607,34 @@ func ixRingTransfer(
 ) solanago.Instruction {
 	data := make([]byte, 865)
 	off := 0
-	data[off] = 0x01; off++
-	copy(data[off:off+64], proofA[:]); off += 64
-	copy(data[off:off+128], proofB[:]); off += 128
-	copy(data[off:off+64], proofC[:]); off += 64
-	copy(data[off:off+64], commitment[:]); off += 64
-	copy(data[off:off+32], commitHash[:]); off += 32
-	copy(data[off:off+64], senderNewC10[:]); off += 64
-	copy(data[off:off+64], senderNewC20[:]); off += 64
-	copy(data[off:off+64], senderNewC11[:]); off += 64
-	copy(data[off:off+64], senderNewC21[:]); off += 64
-	copy(data[off:off+64], recvDeltaC10[:]); off += 64
-	copy(data[off:off+64], recvDeltaC20[:]); off += 64
-	copy(data[off:off+64], recvDeltaC11[:]); off += 64
-	copy(data[off:off+64], recvDeltaC21[:]); off += 64
+	data[off] = 0x01
+	off++
+	copy(data[off:off+64], proofA[:])
+	off += 64
+	copy(data[off:off+128], proofB[:])
+	off += 128
+	copy(data[off:off+64], proofC[:])
+	off += 64
+	copy(data[off:off+64], commitment[:])
+	off += 64
+	copy(data[off:off+32], commitHash[:])
+	off += 32
+	copy(data[off:off+64], senderNewC10[:])
+	off += 64
+	copy(data[off:off+64], senderNewC20[:])
+	off += 64
+	copy(data[off:off+64], senderNewC11[:])
+	off += 64
+	copy(data[off:off+64], senderNewC21[:])
+	off += 64
+	copy(data[off:off+64], recvDeltaC10[:])
+	off += 64
+	copy(data[off:off+64], recvDeltaC20[:])
+	off += 64
+	copy(data[off:off+64], recvDeltaC11[:])
+	off += 64
+	copy(data[off:off+64], recvDeltaC21[:])
+	off += 64
 	if off != 865 {
 		panic(fmt.Sprintf("ixRingTransfer: expected 865 bytes, got %d", off))
 	}
@@ -638,15 +662,24 @@ func ixWithdraw(
 ) solanago.Instruction {
 	data := make([]byte, 489)
 	off := 0
-	data[off] = 0x03; off++
-	copy(data[off:off+64], proofA[:]); off += 64
-	copy(data[off:off+128], proofB[:]); off += 128
-	copy(data[off:off+64], proofC[:]); off += 64
-	copy(data[off:off+64], commitment[:]); off += 64
-	copy(data[off:off+32], commitHash[:]); off += 32
-	copy(data[off:off+64], newC1[:]); off += 64
-	copy(data[off:off+64], newC2[:]); off += 64
-	binary.LittleEndian.PutUint64(data[off:off+8], amount); off += 8
+	data[off] = 0x03
+	off++
+	copy(data[off:off+64], proofA[:])
+	off += 64
+	copy(data[off:off+128], proofB[:])
+	off += 128
+	copy(data[off:off+64], proofC[:])
+	off += 64
+	copy(data[off:off+64], commitment[:])
+	off += 64
+	copy(data[off:off+32], commitHash[:])
+	off += 32
+	copy(data[off:off+64], newC1[:])
+	off += 64
+	copy(data[off:off+64], newC2[:])
+	off += 64
+	binary.LittleEndian.PutUint64(data[off:off+8], amount)
+	off += 8
 	if off != 489 {
 		panic(fmt.Sprintf("ixWithdraw: expected 489 bytes, got %d", off))
 	}

@@ -17,12 +17,12 @@
 //
 // The circuit proves:
 //
-//	1. Pk     = Sk * G                           (key ownership)
-//	2. OldC2  = Sk * OldC1 + OldBalance * G      (correct decryption)
-//	3. NewC1  = RNew * G                          (fresh randomness)
-//	4. NewC2  = RNew * Pk + NewBalance * G        (correct re-encryption)
-//	5. OldBalance = Amount + NewBalance           (arithmetic soundness)
-//	6. OldBalance, NewBalance, Amount ∈ [0, 2³²) (no overdraft via range check)
+//  1. Pk     = Sk * G                           (key ownership)
+//  2. OldC2  = Sk * OldC1 + OldBalance * G      (correct decryption)
+//  3. NewC1  = RNew * G                          (fresh randomness)
+//  4. NewC2  = RNew * Pk + NewBalance * G        (correct re-encryption)
+//  5. OldBalance = Amount + NewBalance           (arithmetic soundness)
+//  6. OldBalance, NewBalance, Amount ∈ [0, 2³²) (no overdraft via range check)
 package circuit
 
 import (
@@ -73,15 +73,15 @@ func (c *WithdrawCircuit) Define(api frontend.API) error {
 
 	// Generator constant used below.
 	_, _, g1gen, _ := bn254.Generators()
-	gPoint         := sw_bn254.NewG1Affine(g1gen)
+	gPoint := sw_bn254.NewG1Affine(g1gen)
 
 	// ── 4. Pk = Sk * G ─────────────────────────────────────────────────────
 	computedPk := curve.ScalarMulBase(&c.Sk)
 	curve.AssertIsEqual(computedPk, &c.Pk)
 
 	// ── 5. OldC2 = Sk * OldC1 + OldBalance * G ────────────────────────────
-	skC1          := curve.ScalarMul(&c.OldC1, &c.Sk)
-	oldBalG        := curve.ScalarMulBase(oldScalar)
+	skC1 := curve.ScalarMul(&c.OldC1, &c.Sk)
+	oldBalG := curve.ScalarMulBase(oldScalar)
 	computedOldC2 := curve.Add(skC1, oldBalG)
 	curve.AssertIsEqual(computedOldC2, &c.OldC2)
 
@@ -94,10 +94,10 @@ func (c *WithdrawCircuit) Define(api frontend.API) error {
 	// when NewBalance = 0 (full withdrawal).  Scalar NewBalance+1 ∈ [1, 2³²]
 	// is never zero.  Both curve.Add calls operate on non-identity,
 	// non-equal points with overwhelming probability for random RNew.
-	nbP1Bits      := api.ToBinary(api.Add(c.NewBalance, 1), 33)
-	nbP1Scalar    := scalarField.FromBits(nbP1Bits...)
-	nbP1G         := curve.ScalarMulBase(nbP1Scalar)
-	rnPk          := curve.ScalarMul(&c.Pk, &c.RNew)
+	nbP1Bits := api.ToBinary(api.Add(c.NewBalance, 1), 33)
+	nbP1Scalar := scalarField.FromBits(nbP1Bits...)
+	nbP1G := curve.ScalarMulBase(nbP1Scalar)
+	rnPk := curve.ScalarMul(&c.Pk, &c.RNew)
 	computedNewC2 := curve.Add(curve.Add(rnPk, nbP1G), curve.Neg(&gPoint))
 	curve.AssertIsEqual(computedNewC2, &c.NewC2)
 

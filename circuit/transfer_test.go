@@ -47,13 +47,13 @@ func buildRingWitness(
 		return r
 	}
 
-	sk     := toFr(skBig)
-	rOld   := toFr(rOldBig)
-	rNew   := toFr(rNewBig)
+	sk := toFr(skBig)
+	rOld := toFr(rOldBig)
+	rNew := toFr(rNewBig)
 	rDecoy := toFr(rDecoyBig)
-	rT     := toFr(rTBig)
-	rRecv  := toFr(rRecvBig)
-	decoySk    := toFr(decoySkBig)
+	rT := toFr(rTBig)
+	rRecv := toFr(rRecvBig)
+	decoySk := toFr(decoySkBig)
 	decoyRecvSk := toFr(decoyRecvSkBig)
 
 	var bFr, vFr, bmvFr bn254fr.Element
@@ -62,27 +62,27 @@ func buildRingWitness(
 	bmvFr.SetUint64(uint64(b - v))
 
 	// Real sender
-	realSenderPk   := mul(G, sk)
-	realOldC1      := mul(G, rOld)
-	realOldC2      := add(mul(realOldC1, sk), mul(G, bFr))
-	realNewC1      := mul(G, rNew)
-	realNewC2      := add(mul(realNewC1, sk), mul(G, bmvFr))
+	realSenderPk := mul(G, sk)
+	realOldC1 := mul(G, rOld)
+	realOldC2 := add(mul(realOldC1, sk), mul(G, bFr))
+	realNewC1 := mul(G, rNew)
+	realNewC2 := add(mul(realNewC1, sk), mul(G, bmvFr))
 
 	// Decoy sender: generate some initial ciphertext, then re-randomize
 	decoyRandFr := toFr(new(big.Int).SetInt64(0x5678abcd))
-	decoySenderPk  := mul(G, decoySk)
-	decoyOldC1     := mul(G, decoyRandFr)
-	decoyOldC2     := add(mul(decoyOldC1, decoySk), mul(G, bFr)) // same balance for simplicity
-	decoyNewC1     := add(decoyOldC1, mul(G, rDecoy))            // re-randomize
-	decoyNewC2     := add(decoyOldC2, mul(decoySenderPk, rDecoy))
+	decoySenderPk := mul(G, decoySk)
+	decoyOldC1 := mul(G, decoyRandFr)
+	decoyOldC2 := add(mul(decoyOldC1, decoySk), mul(G, bFr)) // same balance for simplicity
+	decoyNewC1 := add(decoyOldC1, mul(G, rDecoy))            // re-randomize
+	decoyNewC2 := add(decoyOldC2, mul(decoySenderPk, rDecoy))
 
 	// Transfer delta
-	realRecvSk  := decoyRecvSk
+	realRecvSk := decoyRecvSk
 	_ = realRecvSk
 	decoyRecvSkFr := toFr(new(big.Int).SetInt64(0x9abcdef0))
 
 	// Two receiver PKs
-	realRecvPk  := mul(G, decoyRecvSk)   // first param is used as the "real" recv key
+	realRecvPk := mul(G, decoyRecvSk) // first param is used as the "real" recv key
 	decoyRecvPk := mul(G, decoyRecvSkFr)
 
 	// Real receiver delta: encrypts V under realRecvPk
@@ -174,14 +174,14 @@ func buildRingWitness(
 }
 
 func TestRingCircuitSatisfiable(t *testing.T) {
-	skBig, _        := new(big.Int).SetString("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 16)
-	rOld, _         := new(big.Int).SetString("cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe", 16)
-	rNew, _         := new(big.Int).SetString("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef", 16)
-	rDecoy, _       := new(big.Int).SetString("aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd", 16)
-	rT, _           := new(big.Int).SetString("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", 16)
-	rRecv, _        := new(big.Int).SetString("1111222233334444111122223333444411112222333344441111222233334444", 16)
-	decoySk, _      := new(big.Int).SetString("5555666677778888555566667777888855556666777788885555666677778888", 16)
-	decoyRecvSk, _  := new(big.Int).SetString("9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa", 16)
+	skBig, _ := new(big.Int).SetString("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 16)
+	rOld, _ := new(big.Int).SetString("cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe", 16)
+	rNew, _ := new(big.Int).SetString("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef", 16)
+	rDecoy, _ := new(big.Int).SetString("aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd", 16)
+	rT, _ := new(big.Int).SetString("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", 16)
+	rRecv, _ := new(big.Int).SetString("1111222233334444111122223333444411112222333344441111222233334444", 16)
+	decoySk, _ := new(big.Int).SetString("5555666677778888555566667777888855556666777788885555666677778888", 16)
+	decoyRecvSk, _ := new(big.Int).SetString("9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa", 16)
 
 	witness := buildRingWitness(t, skBig, rOld, rNew, rDecoy, rT, rRecv,
 		decoySk, decoyRecvSk, 1000, 400, 0, 0)
@@ -202,13 +202,13 @@ func TestRingCircuitSatisfiable(t *testing.T) {
 }
 
 func TestRingCircuitSatisfiableSenderIdx1(t *testing.T) {
-	skBig, _       := new(big.Int).SetString("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 16)
-	rOld, _        := new(big.Int).SetString("cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe", 16)
-	rNew, _        := new(big.Int).SetString("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef", 16)
-	rDecoy, _      := new(big.Int).SetString("aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd", 16)
-	rT, _          := new(big.Int).SetString("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", 16)
-	rRecv, _       := new(big.Int).SetString("1111222233334444111122223333444411112222333344441111222233334444", 16)
-	decoySk, _     := new(big.Int).SetString("5555666677778888555566667777888855556666777788885555666677778888", 16)
+	skBig, _ := new(big.Int).SetString("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 16)
+	rOld, _ := new(big.Int).SetString("cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe", 16)
+	rNew, _ := new(big.Int).SetString("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef", 16)
+	rDecoy, _ := new(big.Int).SetString("aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd", 16)
+	rT, _ := new(big.Int).SetString("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", 16)
+	rRecv, _ := new(big.Int).SetString("1111222233334444111122223333444411112222333344441111222233334444", 16)
+	decoySk, _ := new(big.Int).SetString("5555666677778888555566667777888855556666777788885555666677778888", 16)
 	decoyRecvSk, _ := new(big.Int).SetString("9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa", 16)
 
 	// sender_idx=1, recv_idx=1 — real sender/receiver in ring slot 1
@@ -229,13 +229,13 @@ func TestRingCircuitSatisfiableSenderIdx1(t *testing.T) {
 }
 
 func TestRingCircuitRejectsInvalidWitness(t *testing.T) {
-	skBig, _       := new(big.Int).SetString("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 16)
-	rOld, _        := new(big.Int).SetString("cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe", 16)
-	rNew, _        := new(big.Int).SetString("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef", 16)
-	rDecoy, _      := new(big.Int).SetString("aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd", 16)
-	rT, _          := new(big.Int).SetString("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", 16)
-	rRecv, _       := new(big.Int).SetString("1111222233334444111122223333444411112222333344441111222233334444", 16)
-	decoySk, _     := new(big.Int).SetString("5555666677778888555566667777888855556666777788885555666677778888", 16)
+	skBig, _ := new(big.Int).SetString("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 16)
+	rOld, _ := new(big.Int).SetString("cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe", 16)
+	rNew, _ := new(big.Int).SetString("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef", 16)
+	rDecoy, _ := new(big.Int).SetString("aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd", 16)
+	rT, _ := new(big.Int).SetString("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", 16)
+	rRecv, _ := new(big.Int).SetString("1111222233334444111122223333444411112222333344441111222233334444", 16)
+	decoySk, _ := new(big.Int).SetString("5555666677778888555566667777888855556666777788885555666677778888", 16)
 	decoyRecvSk, _ := new(big.Int).SetString("9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa", 16)
 
 	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit.RingTransferCircuit{})
@@ -320,13 +320,13 @@ func TestRingGroth16ProveVerify(t *testing.T) {
 		t.Skip("skipping Groth16 prove/verify in short mode")
 	}
 
-	skBig, _       := new(big.Int).SetString("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 16)
-	rOld, _        := new(big.Int).SetString("cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe", 16)
-	rNew, _        := new(big.Int).SetString("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef", 16)
-	rDecoy, _      := new(big.Int).SetString("aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd", 16)
-	rT, _          := new(big.Int).SetString("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", 16)
-	rRecv, _       := new(big.Int).SetString("1111222233334444111122223333444411112222333344441111222233334444", 16)
-	decoySk, _     := new(big.Int).SetString("5555666677778888555566667777888855556666777788885555666677778888", 16)
+	skBig, _ := new(big.Int).SetString("deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef", 16)
+	rOld, _ := new(big.Int).SetString("cafebabecafebabecafebabecafebabecafebabecafebabecafebabecafebabe", 16)
+	rNew, _ := new(big.Int).SetString("1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef", 16)
+	rDecoy, _ := new(big.Int).SetString("aabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccddaabbccdd", 16)
+	rT, _ := new(big.Int).SetString("fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210", 16)
+	rRecv, _ := new(big.Int).SetString("1111222233334444111122223333444411112222333344441111222233334444", 16)
+	decoySk, _ := new(big.Int).SetString("5555666677778888555566667777888855556666777788885555666677778888", 16)
 	decoyRecvSk, _ := new(big.Int).SetString("9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa9999aaaa", 16)
 
 	witness := buildRingWitness(t, skBig, rOld, rNew, rDecoy, rT, rRecv,

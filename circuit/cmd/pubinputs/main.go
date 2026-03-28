@@ -61,29 +61,29 @@ func main() {
 	vFr.SetUint64(uint64(amount))
 	bmvFr.SetUint64(uint64(balance - amount))
 
-	realSenderPk  := mul(G, sk)
-	realOldC1     := mul(G, rOld)
-	realOldC2     := add(mul(realOldC1, sk), mul(G, bFr))
-	realNewC1     := mul(G, rNew)
-	realNewC2     := add(mul(realNewC1, sk), mul(G, bmvFr))
+	realSenderPk := mul(G, sk)
+	realOldC1 := mul(G, rOld)
+	realOldC2 := add(mul(realOldC1, sk), mul(G, bFr))
+	realNewC1 := mul(G, rNew)
+	realNewC2 := add(mul(realNewC1, sk), mul(G, bmvFr))
 
-	decoySenderPk  := mul(G, decoySk)
-	decoyRandFr    := bn254fr.Element{}
+	decoySenderPk := mul(G, decoySk)
+	decoyRandFr := bn254fr.Element{}
 	decoyRandFr.SetUint64(50)
-	decoyOldC1    := mul(G, decoyRandFr)
-	decoyOldC2    := add(mul(decoyOldC1, decoySk), mul(G, bFr))
-	decoyNewC1    := add(decoyOldC1, mul(G, rDecoy))
-	decoyNewC2    := add(decoyOldC2, mul(decoySenderPk, rDecoy))
+	decoyOldC1 := mul(G, decoyRandFr)
+	decoyOldC2 := add(mul(decoyOldC1, decoySk), mul(G, bFr))
+	decoyNewC1 := add(decoyOldC1, mul(G, rDecoy))
+	decoyNewC2 := add(decoyOldC2, mul(decoySenderPk, rDecoy))
 
-	realRecvPk    := mul(G, decoyRecvSk)
+	realRecvPk := mul(G, decoyRecvSk)
 	var decoyRecvSkFr bn254fr.Element
 	decoyRecvSkFr.SetUint64(77)
-	decoyRecvPk   := mul(G, decoyRecvSkFr)
+	decoyRecvPk := mul(G, decoyRecvSkFr)
 
-	transferC1    := mul(G, rT)
-	transferC2    := add(mul(realRecvPk, rT), mul(G, vFr))
-	decoyDeltaC1  := mul(G, rRecv)
-	decoyDeltaC2  := mul(decoyRecvPk, rRecv)
+	transferC1 := mul(G, rT)
+	transferC2 := add(mul(realRecvPk, rT), mul(G, vFr))
+	decoyDeltaC1 := mul(G, rRecv)
+	decoyDeltaC2 := mul(decoyRecvPk, rRecv)
 
 	var skInt, rNewInt, rDecoyInt, rTInt, rRecvInt big.Int
 	sk.BigInt(&skInt)
@@ -93,12 +93,12 @@ func main() {
 	rRecv.BigInt(&rRecvInt)
 
 	w := &xfer.RingTransferCircuit{
-		Sk:        emulated.ValueOf[sw_bn254.ScalarField](&skInt),
-		RNew:      emulated.ValueOf[sw_bn254.ScalarField](&rNewInt),
-		RDecoy:    emulated.ValueOf[sw_bn254.ScalarField](&rDecoyInt),
-		RT:        emulated.ValueOf[sw_bn254.ScalarField](&rTInt),
-		RRecv:     emulated.ValueOf[sw_bn254.ScalarField](&rRecvInt),
-		B: balance, V: amount, BmV: balance - amount,
+		Sk:     emulated.ValueOf[sw_bn254.ScalarField](&skInt),
+		RNew:   emulated.ValueOf[sw_bn254.ScalarField](&rNewInt),
+		RDecoy: emulated.ValueOf[sw_bn254.ScalarField](&rDecoyInt),
+		RT:     emulated.ValueOf[sw_bn254.ScalarField](&rTInt),
+		RRecv:  emulated.ValueOf[sw_bn254.ScalarField](&rRecvInt),
+		B:      balance, V: amount, BmV: balance - amount,
 		SenderIdx: 0, RecvIdx: 0,
 		SenderPk0:    sw_bn254.NewG1Affine(realSenderPk),
 		SenderPk1:    sw_bn254.NewG1Affine(decoySenderPk),
