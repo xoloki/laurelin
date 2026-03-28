@@ -27,7 +27,7 @@ use solana_program::{
 };
 
 use groth16::{verify, VerificationKey};
-use instruction::LaurelinInstruction;
+use instruction::{parse_create_account, parse_deposit, parse_ring_transfer, parse_withdraw, LaurelinInstruction};
 use state::{AccountState, G1Point};
 
 #[cfg(not(test))]
@@ -94,58 +94,25 @@ pub fn process_instruction(
     accounts: &[AccountInfo],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    let ix = LaurelinInstruction::try_from_bytes(instruction_data)
+    let (&opcode, rest) = instruction_data.split_first()
         .ok_or(ProgramError::InvalidInstructionData)?;
-
-    match ix {
-        LaurelinInstruction::CreateAccount { pubkey, c1, c2 } => {
-            process_create_account(program_id, accounts, pubkey, c1, c2)
-        }
-        LaurelinInstruction::RingTransfer {
-            proof,
-            commitment,
-            commit_hash,
-            sender_new_c1,
-            sender_new_c2,
-            recv_delta_c1,
-            recv_delta_c2,
-        } => process_ring_transfer(
-            program_id,
-            accounts,
-            proof,
-            commitment,
-            commit_hash,
-            sender_new_c1,
-            sender_new_c2,
-            recv_delta_c1,
-            recv_delta_c2,
-        ),
-        LaurelinInstruction::Deposit {
-            proof,
-            commitment,
-            commit_hash,
-            delta_c1,
-            delta_c2,
-            amount,
-        } => process_deposit(program_id, accounts, proof, commitment, commit_hash, delta_c1, delta_c2, amount),
-        LaurelinInstruction::Withdraw {
-            proof,
-            commitment,
-            commit_hash,
-            new_c1,
-            new_c2,
-            amount,
-        } => process_withdraw(program_id, accounts, proof, commitment, commit_hash, new_c1, new_c2, amount),
+    match opcode {
+        0 => process_create_account(program_id, accounts, rest),
+        1 => process_ring_transfer(program_id, accounts, rest),
+        2 => process_deposit(program_id, accounts, rest),
+        3 => process_withdraw(program_id, accounts, rest),
+        _ => Err(ProgramError::InvalidInstructionData),
     }
 }
 
 fn process_create_account(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
-    pubkey: G1Point,
-    c1: G1Point,
-    c2: G1Point,
+    data: &[u8],
 ) -> ProgramResult {
+    let LaurelinInstruction::CreateAccount { pubkey, c1, c2 } =
+        parse_create_account(data).ok_or(ProgramError::InvalidInstructionData)?
+    else { return Err(ProgramError::InvalidInstructionData) };
     if accounts.len() < 3 {
         return Err(ProgramError::NotEnoughAccountKeys);
     }
@@ -190,14 +157,11 @@ fn process_create_account(
 fn process_ring_transfer(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
-    proof: state::Groth16Proof,
-    commitment: G1Point,
-    commit_hash: state::Scalar,
-    sender_new_c1: [G1Point; 2],
-    sender_new_c2: [G1Point; 2],
-    recv_delta_c1: [G1Point; 2],
-    recv_delta_c2: [G1Point; 2],
+    data: &[u8],
 ) -> ProgramResult {
+    let LaurelinInstruction::RingTransfer { proof, commitment, commit_hash, sender_new_c1, sender_new_c2, recv_delta_c1, recv_delta_c2 } =
+        parse_ring_transfer(data).ok_or(ProgramError::InvalidInstructionData)?
+    else { return Err(ProgramError::InvalidInstructionData) };
     if accounts.len() < 4 {
         return Err(ProgramError::NotEnoughAccountKeys);
     }
@@ -270,13 +234,11 @@ fn process_ring_transfer(
 fn process_deposit(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
-    proof: state::Groth16Proof,
-    commitment: G1Point,
-    commit_hash: state::Scalar,
-    delta_c1: G1Point,
-    delta_c2: G1Point,
-    amount: u64,
+    data: &[u8],
 ) -> ProgramResult {
+    let LaurelinInstruction::Deposit { proof, commitment, commit_hash, delta_c1, delta_c2, amount } =
+        parse_deposit(data).ok_or(ProgramError::InvalidInstructionData)?
+    else { return Err(ProgramError::InvalidInstructionData) };
     if accounts.len() < 4 {
         return Err(ProgramError::NotEnoughAccountKeys);
     }
@@ -382,13 +344,11 @@ fn build_deposit_public_inputs(
 fn process_withdraw(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
-    proof: state::Groth16Proof,
-    commitment: G1Point,
-    commit_hash: state::Scalar,
-    new_c1: G1Point,
-    new_c2: G1Point,
-    amount: u64,
+    data: &[u8],
 ) -> ProgramResult {
+    let LaurelinInstruction::Withdraw { proof, commitment, commit_hash, new_c1, new_c2, amount } =
+        parse_withdraw(data).ok_or(ProgramError::InvalidInstructionData)?
+    else { return Err(ProgramError::InvalidInstructionData) };
     if accounts.len() < 3 {
         return Err(ProgramError::NotEnoughAccountKeys);
     }

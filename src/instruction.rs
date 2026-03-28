@@ -73,92 +73,89 @@ pub enum LaurelinInstruction {
 
 }
 
+/// Parse a CreateAccount payload (no opcode byte): pubkey(64) || c1(64) || c2(64)
+pub fn parse_create_account(data: &[u8]) -> Option<LaurelinInstruction> {
+    if data.len() < 192 { return None; }
+    let mut pubkey = [0u8; 64];
+    let mut c1     = [0u8; 64];
+    let mut c2     = [0u8; 64];
+    pubkey.copy_from_slice(&data[0..64]);
+    c1.copy_from_slice(&data[64..128]);
+    c2.copy_from_slice(&data[128..192]);
+    Some(LaurelinInstruction::CreateAccount { pubkey, c1, c2 })
+}
+
+/// Parse a RingTransfer payload (no opcode byte):
+/// proof(256) || commitment(64) || commit_hash(32) || 8×G1(512)
+pub fn parse_ring_transfer(data: &[u8]) -> Option<LaurelinInstruction> {
+    if data.len() < 864 { return None; }
+    let proof = Groth16Proof::try_from_bytes(&data[0..256])?;
+    let mut commitment  = [0u8; 64];
+    let mut commit_hash = [0u8; 32];
+    commitment.copy_from_slice(&data[256..320]);
+    commit_hash.copy_from_slice(&data[320..352]);
+    let mut sender_new_c1 = [[0u8; 64]; 2];
+    let mut sender_new_c2 = [[0u8; 64]; 2];
+    let mut recv_delta_c1 = [[0u8; 64]; 2];
+    let mut recv_delta_c2 = [[0u8; 64]; 2];
+    let off = 352;
+    sender_new_c1[0].copy_from_slice(&data[off..off+64]);
+    sender_new_c2[0].copy_from_slice(&data[off+64..off+128]);
+    sender_new_c1[1].copy_from_slice(&data[off+128..off+192]);
+    sender_new_c2[1].copy_from_slice(&data[off+192..off+256]);
+    recv_delta_c1[0].copy_from_slice(&data[off+256..off+320]);
+    recv_delta_c2[0].copy_from_slice(&data[off+320..off+384]);
+    recv_delta_c1[1].copy_from_slice(&data[off+384..off+448]);
+    recv_delta_c2[1].copy_from_slice(&data[off+448..off+512]);
+    Some(LaurelinInstruction::RingTransfer {
+        proof, commitment, commit_hash,
+        sender_new_c1, sender_new_c2,
+        recv_delta_c1, recv_delta_c2,
+    })
+}
+
+/// Parse a Deposit payload (no opcode byte):
+/// proof(256) || commitment(64) || commit_hash(32) || delta_c1(64) || delta_c2(64) || amount(8)
+pub fn parse_deposit(data: &[u8]) -> Option<LaurelinInstruction> {
+    if data.len() < 488 { return None; }
+    let proof = Groth16Proof::try_from_bytes(&data[0..256])?;
+    let mut commitment  = [0u8; 64];
+    let mut commit_hash = [0u8; 32];
+    let mut delta_c1    = [0u8; 64];
+    let mut delta_c2    = [0u8; 64];
+    commitment.copy_from_slice(&data[256..320]);
+    commit_hash.copy_from_slice(&data[320..352]);
+    delta_c1.copy_from_slice(&data[352..416]);
+    delta_c2.copy_from_slice(&data[416..480]);
+    let amount = u64::from_le_bytes(data[480..488].try_into().ok()?);
+    Some(LaurelinInstruction::Deposit { proof, commitment, commit_hash, delta_c1, delta_c2, amount })
+}
+
+/// Parse a Withdraw payload (no opcode byte):
+/// proof(256) || commitment(64) || commit_hash(32) || new_c1(64) || new_c2(64) || amount(8)
+pub fn parse_withdraw(data: &[u8]) -> Option<LaurelinInstruction> {
+    if data.len() < 488 { return None; }
+    let proof = Groth16Proof::try_from_bytes(&data[0..256])?;
+    let mut commitment  = [0u8; 64];
+    let mut commit_hash = [0u8; 32];
+    let mut new_c1      = [0u8; 64];
+    let mut new_c2      = [0u8; 64];
+    commitment.copy_from_slice(&data[256..320]);
+    commit_hash.copy_from_slice(&data[320..352]);
+    new_c1.copy_from_slice(&data[352..416]);
+    new_c2.copy_from_slice(&data[416..480]);
+    let amount = u64::from_le_bytes(data[480..488].try_into().ok()?);
+    Some(LaurelinInstruction::Withdraw { proof, commitment, commit_hash, new_c1, new_c2, amount })
+}
+
 impl LaurelinInstruction {
     pub fn try_from_bytes(data: &[u8]) -> Option<Self> {
         let (&opcode, rest) = data.split_first()?;
         match opcode {
-            0 => {
-                if rest.len() < 192 {
-                    return None;
-                }
-                let mut pubkey = [0u8; 64];
-                let mut c1 = [0u8; 64];
-                let mut c2 = [0u8; 64];
-                pubkey.copy_from_slice(&rest[0..64]);
-                c1.copy_from_slice(&rest[64..128]);
-                c2.copy_from_slice(&rest[128..192]);
-                Some(Self::CreateAccount { pubkey, c1, c2 })
-            }
-            1 => {
-                // proof(256) + commitment(64) + commit_hash(32) + 8×G1(512) = 864
-                if rest.len() < 864 {
-                    return None;
-                }
-                let proof = Groth16Proof::try_from_bytes(&rest[0..256])?;
-                let mut commitment  = [0u8; 64];
-                let mut commit_hash = [0u8; 32];
-                commitment.copy_from_slice(&rest[256..320]);
-                commit_hash.copy_from_slice(&rest[320..352]);
-
-                let mut sender_new_c1 = [[0u8; 64]; 2];
-                let mut sender_new_c2 = [[0u8; 64]; 2];
-                let mut recv_delta_c1 = [[0u8; 64]; 2];
-                let mut recv_delta_c2 = [[0u8; 64]; 2];
-
-                let off = 352;
-                sender_new_c1[0].copy_from_slice(&rest[off..off+64]);
-                sender_new_c2[0].copy_from_slice(&rest[off+64..off+128]);
-                sender_new_c1[1].copy_from_slice(&rest[off+128..off+192]);
-                sender_new_c2[1].copy_from_slice(&rest[off+192..off+256]);
-                recv_delta_c1[0].copy_from_slice(&rest[off+256..off+320]);
-                recv_delta_c2[0].copy_from_slice(&rest[off+320..off+384]);
-                recv_delta_c1[1].copy_from_slice(&rest[off+384..off+448]);
-                recv_delta_c2[1].copy_from_slice(&rest[off+448..off+512]);
-
-                Some(Self::RingTransfer {
-                    proof,
-                    commitment,
-                    commit_hash,
-                    sender_new_c1,
-                    sender_new_c2,
-                    recv_delta_c1,
-                    recv_delta_c2,
-                })
-            }
-            2 => {
-                // proof(256) + commitment(64) + commit_hash(32) + delta_c1(64) + delta_c2(64) + amount(8) = 488
-                if rest.len() < 488 {
-                    return None;
-                }
-                let proof = Groth16Proof::try_from_bytes(&rest[0..256])?;
-                let mut commitment  = [0u8; 64];
-                let mut commit_hash = [0u8; 32];
-                let mut delta_c1    = [0u8; 64];
-                let mut delta_c2    = [0u8; 64];
-                commitment.copy_from_slice(&rest[256..320]);
-                commit_hash.copy_from_slice(&rest[320..352]);
-                delta_c1.copy_from_slice(&rest[352..416]);
-                delta_c2.copy_from_slice(&rest[416..480]);
-                let amount = u64::from_le_bytes(rest[480..488].try_into().ok()?);
-                Some(Self::Deposit { proof, commitment, commit_hash, delta_c1, delta_c2, amount })
-            }
-            3 => {
-                // proof(256) + commitment(64) + commit_hash(32) + new_c1(64) + new_c2(64) + amount(8) = 488
-                if rest.len() < 488 {
-                    return None;
-                }
-                let proof = Groth16Proof::try_from_bytes(&rest[0..256])?;
-                let mut commitment  = [0u8; 64];
-                let mut commit_hash = [0u8; 32];
-                let mut new_c1      = [0u8; 64];
-                let mut new_c2      = [0u8; 64];
-                commitment.copy_from_slice(&rest[256..320]);
-                commit_hash.copy_from_slice(&rest[320..352]);
-                new_c1.copy_from_slice(&rest[352..416]);
-                new_c2.copy_from_slice(&rest[416..480]);
-                let amount = u64::from_le_bytes(rest[480..488].try_into().ok()?);
-                Some(Self::Withdraw { proof, commitment, commit_hash, new_c1, new_c2, amount })
-            }
+            0 => parse_create_account(rest),
+            1 => parse_ring_transfer(rest),
+            2 => parse_deposit(rest),
+            3 => parse_withdraw(rest),
             _ => None,
         }
     }
