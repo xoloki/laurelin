@@ -1,6 +1,5 @@
 use solana_client::rpc_client::RpcClient;
 use solana_client::rpc_config::RpcTransactionConfig;
-use solana_transaction_status::UiTransactionEncoding;
 use solana_sdk::{
     commitment_config::CommitmentConfig,
     instruction::{AccountMeta, Instruction},
@@ -8,6 +7,7 @@ use solana_sdk::{
     signature::{read_keypair_file, Signer},
     transaction::Transaction,
 };
+use solana_transaction_status::UiTransactionEncoding;
 use std::str::FromStr;
 
 // BN254 G1 generator (x=1, y=2), big-endian
@@ -41,17 +41,15 @@ fn generator() -> [u8; 64] {
 }
 
 fn main() {
-    let program_id_str = std::env::args().nth(1)
-        .expect("usage: client <PROGRAM_ID>");
+    let program_id_str = std::env::args().nth(1).expect("usage: client <PROGRAM_ID>");
 
     let rpc_url = "http://localhost:8899";
     let client = RpcClient::new_with_commitment(rpc_url, CommitmentConfig::confirmed());
 
-    let payer = read_keypair_file("accounts/account1.json")
-        .expect("failed to read accounts/account1.json");
+    let payer =
+        read_keypair_file("accounts/account1.json").expect("failed to read accounts/account1.json");
 
-    let program_id = Pubkey::from_str(&program_id_str)
-        .expect("invalid program ID");
+    let program_id = Pubkey::from_str(&program_id_str).expect("invalid program ID");
 
     // build instruction data: point (64) || scalar (32) || expected (64) = 160 bytes
     let g = generator();
@@ -70,7 +68,8 @@ fn main() {
         data: instruction_data,
     };
 
-    let recent_blockhash = client.get_latest_blockhash()
+    let recent_blockhash = client
+        .get_latest_blockhash()
         .expect("failed to get blockhash");
 
     let tx = Transaction::new_signed_with_payer(
@@ -91,15 +90,17 @@ fn main() {
         }
     };
 
-    match client.get_transaction_with_config(&sig, RpcTransactionConfig {
-        encoding: Some(UiTransactionEncoding::Json),
-        commitment: Some(CommitmentConfig::confirmed()),
-        max_supported_transaction_version: Some(0),
-    }) {
+    match client.get_transaction_with_config(
+        &sig,
+        RpcTransactionConfig {
+            encoding: Some(UiTransactionEncoding::Json),
+            commitment: Some(CommitmentConfig::confirmed()),
+            max_supported_transaction_version: Some(0),
+        },
+    ) {
         Ok(tx) => {
             if let Some(meta) = tx.transaction.meta {
-                let logs: Vec<String> = Option::from(meta.log_messages)
-                    .unwrap_or_default();
+                let logs: Vec<String> = Option::from(meta.log_messages).unwrap_or_default();
                 println!("program logs:");
                 for line in logs {
                     println!("  {}", line);

@@ -43,7 +43,7 @@ func buildWithdrawWitness(
 		return r
 	}
 
-	sk   := toFr(skBig)
+	sk := toFr(skBig)
 	rOld := toFr(rOldBig)
 	rNew := toFr(rNewBig)
 
@@ -53,11 +53,11 @@ func buildWithdrawWitness(
 	oldBalFr.SetUint64(uint64(oldBalance))
 	newBalFr.SetUint64(uint64(newBalance))
 
-	pk     := mul(G, sk)
-	oldC1  := mul(G, rOld)
-	oldC2  := add(mul(oldC1, sk), mul(G, oldBalFr)) // sk*C1 + oldBal*G
-	newC1  := mul(G, rNew)
-	newC2  := add(mul(pk, rNew), mul(G, newBalFr))  // rNew*pk + newBal*G
+	pk := mul(G, sk)
+	oldC1 := mul(G, rOld)
+	oldC2 := add(mul(oldC1, sk), mul(G, oldBalFr)) // sk*C1 + oldBal*G
+	newC1 := mul(G, rNew)
+	newC2 := add(mul(pk, rNew), mul(G, newBalFr)) // rNew*pk + newBal*G
 
 	var skInt, rNewInt big.Int
 	sk.BigInt(&skInt)
@@ -127,6 +127,43 @@ func TestWithdrawGroth16ProveVerify(t *testing.T) {
 	t.Log("withdraw proof verified ok")
 }
 
+// TestWithdrawCircuitFullWithdraw verifies the circuit handles withdrawing the
+// entire balance (NewBalance=0), which previously caused a "no modular
+// inverse" panic in ScalarMulBase when the emulated NewBalance scalar was zero.
+func TestWithdrawCircuitFullWithdraw(t *testing.T) {
+	w := buildWithdrawWitness(t, wSkBig, wROldBig, wRNewBig, 1000, 1000)
+
+	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit.WithdrawCircuit{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	witness, err := frontend.NewWitness(w, ecc.BN254.ScalarField())
+	if err != nil {
+		t.Fatalf("witness: %v", err)
+	}
+	if err := ccs.IsSolved(witness); err != nil {
+		t.Fatalf("not satisfied: %v", err)
+	}
+}
+
+// TestWithdrawCircuitZeroWithdraw verifies the circuit handles a zero-lamport
+// withdrawal (Amount=0, NewBalance=OldBalance).
+func TestWithdrawCircuitZeroWithdraw(t *testing.T) {
+	w := buildWithdrawWitness(t, wSkBig, wROldBig, wRNewBig, 1000, 0)
+
+	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit.WithdrawCircuit{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	witness, err := frontend.NewWitness(w, ecc.BN254.ScalarField())
+	if err != nil {
+		t.Fatalf("witness: %v", err)
+	}
+	if err := ccs.IsSolved(witness); err != nil {
+		t.Fatalf("not satisfied: %v", err)
+	}
+}
+
 func TestWithdrawCircuitRejectsInvalidWitness(t *testing.T) {
 	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit.WithdrawCircuit{})
 	if err != nil {
@@ -185,8 +222,8 @@ func TestWithdrawCircuitRejectsInvalidWitness(t *testing.T) {
 	// constraint 6: overdraft — NewBalance would be negative
 	t.Run("overdraft", func(t *testing.T) {
 		w := buildWithdrawWitness(t, wSkBig, wROldBig, wRNewBig, 1000, 400)
-		w.Amount = 1200     // Amount > OldBalance
-		w.NewBalance = 0    // 1000 ≠ 1200 + 0
+		w.Amount = 1200  // Amount > OldBalance
+		w.NewBalance = 0 // 1000 ≠ 1200 + 0
 		mustFail(t, w)
 	})
 }

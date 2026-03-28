@@ -13,8 +13,8 @@ services:
           --faucet-port 9900 \
           --reset &
         until solana --url http://localhost:8899 cluster-version 2>/dev/null; do sleep 1; done
-        solana airdrop 100 $(solana-keygen pubkey /accounts/account1.json) --url http://localhost:8899
-        solana airdrop 100 $(solana-keygen pubkey /accounts/account2.json) --url http://localhost:8899
+        solana airdrop 100000 $(solana-keygen pubkey /accounts/account1.json) --url http://localhost:8899
+        solana airdrop 100000 $(solana-keygen pubkey /accounts/account2.json) --url http://localhost:8899
         wait
     ports:
       - "8899:8899"

@@ -47,10 +47,10 @@ pub fn verify(
     let neg_c = g1_negate(&proof.c);
 
     let result = pairing_check(&[
-        (&proof.a,   &proof.b),
+        (&proof.a, &proof.b),
         (&neg_alpha, &vk.beta),
-        (&neg_vk_x,  &vk.gamma),
-        (&neg_c,     &vk.delta),
+        (&neg_vk_x, &vk.gamma),
+        (&neg_c, &vk.delta),
     ]);
     result
 }

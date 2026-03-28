@@ -1,17 +1,15 @@
 // Integration client: exercises the full Laurelin cycle on a local validator.
 //
-// Cycle:
-//  1. CreateAccount — 4 accounts (real sender, decoy sender, real receiver, decoy receiver)
-//     Real sender and all receivers start with a zero ciphertext.
-//     Decoy sender is initialized with a pre-built ciphertext encrypting balance=1000.
-//  2. Deposit — real sender deposits 1000 lamports; on-chain ZK proof verified.
-//  3. RingTransfer — real sender transfers 400 (hidden) to real receiver; on-chain ZK proof verified.
-//     NOTE: ring transfer updates ciphertexts only; lamports do not move between PDAs.
-//  4. Fund receiver — payer sends 400 lamports directly to receiver PDA via system transfer.
-//     (In production this would happen through a privacy-preserving mechanism; here it is
-//     explicit for demo purposes so that the withdraw step has lamports to pay out.)
-//  5. Withdraw — real receiver withdraws 300 lamports; on-chain ZK proof verified.
-//  6. Balance checks — decrypt all ciphertexts via BSGS and verify expected values.
+// Realistic 4-user test:
+//
+//	Alice(1000), Bob(800), Carol(600), Dave(400) each deposit their initial balance.
+//	4 ring transfers cover every SenderIdx×RecvIdx combination:
+//	  T1 senderIdx=0 recvIdx=0: Alice→Carol  200
+//	  T2 senderIdx=0 recvIdx=1: Alice→Dave   150
+//	  T3 senderIdx=1 recvIdx=0: Bob→Carol    100
+//	  T4 senderIdx=1 recvIdx=1: Bob→Dave      80
+//	Expected balances after transfers: Alice=650, Bob=620, Carol=900, Dave=630.
+//	All 4 users then withdraw their full balance; final encrypted balances = 0.
 //
 // Must be run from the circuit/ directory after running `go run ./setup`:
 //
@@ -54,13 +52,264 @@ const (
 	depositPKPath  = "setup/deposit_pk.bin"
 	withdrawPKPath = "setup/withdraw_pk.bin"
 	rpcURL         = "http://localhost:8899"
-
-	depositAmount  = uint32(1000)
-	transferAmount = uint32(400)
-	withdrawAmount = uint32(300)
-	// recvNewBalance is the receiver's remaining encrypted balance after withdrawal.
-	recvNewBalance = transferAmount - withdrawAmount // 100
 )
+
+// ── Package-level geometry ────────────────────────────────────────────────────
+
+var G bn254.G1Affine
+
+func init() { _, _, G, _ = bn254.Generators() }
+
+// ── Arithmetic helpers ────────────────────────────────────────────────────────
+
+func mulG1(p bn254.G1Affine, s bn254fr.Element) bn254.G1Affine {
+	var n big.Int
+	s.BigInt(&n)
+	var r bn254.G1Affine
+	r.ScalarMultiplication(&p, &n)
+	return r
+}
+
+func addG1(a, b bn254.G1Affine) bn254.G1Affine {
+	var r bn254.G1Affine
+	r.Add(&a, &b)
+	return r
+}
+
+func toFrElem(v uint64) bn254fr.Element {
+	var e bn254fr.Element
+	e.SetUint64(v)
+	return e
+}
+
+func randFrElem() bn254fr.Element {
+	var e bn254fr.Element
+	if _, err := e.SetRandom(); err != nil {
+		fatalf("randFrElem: %v", err)
+	}
+	return e
+}
+
+// ── User ──────────────────────────────────────────────────────────────────────
+
+type User struct {
+	name    string
+	bn254SK bn254fr.Element
+	bn254PK bn254.G1Affine
+	pkBytes [64]byte
+	pda     solanago.PublicKey
+	c1, c2  bn254.G1Affine // current on-chain ciphertext (tracked locally)
+	balance uint32
+}
+
+func newUser(name string, programID solanago.PublicKey) *User {
+	sk := randFrElem()
+	var n big.Int
+	sk.BigInt(&n)
+	var pk bn254.G1Affine
+	pk.ScalarMultiplication(&G, &n)
+	pkB := g1Bytes(&pk)
+	pda, _, err := solanago.FindProgramAddress([][]byte{pkB[:32]}, programID)
+	if err != nil {
+		fatalf("newUser %s PDA: %v", name, err)
+	}
+	return &User{name: name, bn254SK: sk, bn254PK: pk, pkBytes: pkB, pda: pda}
+}
+
+// ── ZK operations ────────────────────────────────────────────────────────────
+
+func doDeposit(
+	client *rpc.Client, payer solanago.PrivateKey,
+	programID, vaultPDA solanago.PublicKey,
+	user *User, amount uint32,
+	depositCCS constraint.ConstraintSystem, depositPK groth16.ProvingKey,
+) {
+	r := randFrElem()
+	var rInt big.Int
+	r.BigInt(&rInt)
+	deltaC1 := mulG1(G, r)
+	deltaC2 := addG1(mulG1(user.bn254PK, r), mulG1(G, toFrElem(uint64(amount))))
+
+	depWitness := &xfer.DepositCircuit{
+		R:       emulated.ValueOf[sw_bn254.ScalarField](&rInt),
+		Pk:      sw_bn254.NewG1Affine(user.bn254PK),
+		DeltaC1: sw_bn254.NewG1Affine(deltaC1),
+		DeltaC2: sw_bn254.NewG1Affine(deltaC2),
+		Amount:  amount,
+	}
+	logf("Proving deposit for %s (amount=%d)…", user.name, amount)
+	proofA, proofB, proofC, commitB, commitHash := proveCircuit(depositCCS, depositPK, depWitness)
+
+	deltaC1B := g1Bytes(&deltaC1)
+	deltaC2B := g1Bytes(&deltaC2)
+	sendAndConfirm(client, payer,
+		ixSetComputeUnitLimit(500_000),
+		ixDeposit(programID, payer.PublicKey(), user.pda, vaultPDA,
+			proofA, proofB, proofC, commitB, commitHash,
+			deltaC1B, deltaC2B, uint64(amount),
+		))
+
+	// Starting from zero ciphertext: new c1/c2 = delta
+	user.c1 = addG1(user.c1, deltaC1)
+	user.c2 = addG1(user.c2, deltaC2)
+	user.balance += amount
+}
+
+func doWithdraw(
+	client *rpc.Client, payer solanago.PrivateKey,
+	programID, vaultPDA solanago.PublicKey,
+	user *User, amount uint32,
+	withdrawCCS constraint.ConstraintSystem, withdrawPK groth16.ProvingKey,
+) {
+	newBalance := user.balance - amount
+	r := randFrElem()
+	var rInt, skInt big.Int
+	r.BigInt(&rInt)
+	user.bn254SK.BigInt(&skInt)
+	newC1 := mulG1(G, r)
+	newC2 := addG1(mulG1(user.bn254PK, r), mulG1(G, toFrElem(uint64(newBalance))))
+
+	wdWitness := &xfer.WithdrawCircuit{
+		Sk:         emulated.ValueOf[sw_bn254.ScalarField](&skInt),
+		RNew:       emulated.ValueOf[sw_bn254.ScalarField](&rInt),
+		OldBalance: user.balance,
+		NewBalance: newBalance,
+		Pk:         sw_bn254.NewG1Affine(user.bn254PK),
+		OldC1:      sw_bn254.NewG1Affine(user.c1),
+		OldC2:      sw_bn254.NewG1Affine(user.c2),
+		NewC1:      sw_bn254.NewG1Affine(newC1),
+		NewC2:      sw_bn254.NewG1Affine(newC2),
+		Amount:     amount,
+	}
+	logf("Proving withdraw for %s (amount=%d, remaining=%d)…", user.name, amount, newBalance)
+	proofA, proofB, proofC, commitB, commitHash := proveCircuit(withdrawCCS, withdrawPK, wdWitness)
+
+	newC1B := g1Bytes(&newC1)
+	newC2B := g1Bytes(&newC2)
+	sendAndConfirm(client, payer,
+		ixSetComputeUnitLimit(800_000),
+		ixWithdraw(programID, user.pda, vaultPDA, payer.PublicKey(),
+			proofA, proofB, proofC, commitB, commitHash,
+			newC1B, newC2B, uint64(amount),
+		))
+
+	user.c1 = newC1
+	user.c2 = newC2
+	user.balance = newBalance
+}
+
+func doRingTransfer(
+	client *rpc.Client, payer solanago.PrivateKey,
+	programID solanago.PublicKey,
+	senders, receivers [2]*User,
+	senderIdx, recvIdx int,
+	amount uint32,
+	transferCCS constraint.ConstraintSystem, transferPK groth16.ProvingKey,
+) {
+	realSender := senders[senderIdx]
+	decoySender := senders[1-senderIdx]
+	realRecv := receivers[recvIdx]
+	decoyRecv := receivers[1-recvIdx]
+	newBalance := realSender.balance - amount
+
+	rNew := randFrElem()
+	rDecoy := randFrElem()
+	rT := randFrElem()
+	rRecv := randFrElem()
+
+	// Real sender: fresh ciphertext encrypting newBalance
+	senderNewC1Real := mulG1(G, rNew)
+	senderNewC2Real := addG1(mulG1(realSender.bn254PK, rNew), mulG1(G, toFrElem(uint64(newBalance))))
+	// Decoy sender: re-randomize (same balance, new blinding)
+	senderNewC1Decoy := addG1(decoySender.c1, mulG1(G, rDecoy))
+	senderNewC2Decoy := addG1(decoySender.c2, mulG1(decoySender.bn254PK, rDecoy))
+	// Real receiver: delta ciphertext encrypting amount
+	recvDeltaC1Real := mulG1(G, rT)
+	recvDeltaC2Real := addG1(mulG1(realRecv.bn254PK, rT), mulG1(G, toFrElem(uint64(amount))))
+	// Decoy receiver: zero delta (re-randomized)
+	recvDeltaC1Decoy := mulG1(G, rRecv)
+	recvDeltaC2Decoy := mulG1(decoyRecv.bn254PK, rRecv)
+
+	// Map to ring slots [0] and [1]
+	var senderNewC1, senderNewC2 [2]bn254.G1Affine
+	var recvDeltaC1, recvDeltaC2 [2]bn254.G1Affine
+	senderNewC1[senderIdx] = senderNewC1Real
+	senderNewC2[senderIdx] = senderNewC2Real
+	senderNewC1[1-senderIdx] = senderNewC1Decoy
+	senderNewC2[1-senderIdx] = senderNewC2Decoy
+	recvDeltaC1[recvIdx] = recvDeltaC1Real
+	recvDeltaC2[recvIdx] = recvDeltaC2Real
+	recvDeltaC1[1-recvIdx] = recvDeltaC1Decoy
+	recvDeltaC2[1-recvIdx] = recvDeltaC2Decoy
+
+	var skInt, rNewInt, rDecoyInt, rTInt, rRecvInt big.Int
+	realSender.bn254SK.BigInt(&skInt)
+	rNew.BigInt(&rNewInt)
+	rDecoy.BigInt(&rDecoyInt)
+	rT.BigInt(&rTInt)
+	rRecv.BigInt(&rRecvInt)
+
+	xferWitness := &xfer.RingTransferCircuit{
+		Sk:        emulated.ValueOf[sw_bn254.ScalarField](&skInt),
+		RNew:      emulated.ValueOf[sw_bn254.ScalarField](&rNewInt),
+		RDecoy:    emulated.ValueOf[sw_bn254.ScalarField](&rDecoyInt),
+		RT:        emulated.ValueOf[sw_bn254.ScalarField](&rTInt),
+		RRecv:     emulated.ValueOf[sw_bn254.ScalarField](&rRecvInt),
+		B:         realSender.balance,
+		V:         amount,
+		BmV:       newBalance,
+		SenderIdx: senderIdx,
+		RecvIdx:   recvIdx,
+
+		SenderPk0:    sw_bn254.NewG1Affine(senders[0].bn254PK),
+		SenderPk1:    sw_bn254.NewG1Affine(senders[1].bn254PK),
+		SenderOldC10: sw_bn254.NewG1Affine(senders[0].c1),
+		SenderOldC11: sw_bn254.NewG1Affine(senders[1].c1),
+		SenderOldC20: sw_bn254.NewG1Affine(senders[0].c2),
+		SenderOldC21: sw_bn254.NewG1Affine(senders[1].c2),
+		SenderNewC10: sw_bn254.NewG1Affine(senderNewC1[0]),
+		SenderNewC11: sw_bn254.NewG1Affine(senderNewC1[1]),
+		SenderNewC20: sw_bn254.NewG1Affine(senderNewC2[0]),
+		SenderNewC21: sw_bn254.NewG1Affine(senderNewC2[1]),
+
+		RecvPk0:      sw_bn254.NewG1Affine(receivers[0].bn254PK),
+		RecvPk1:      sw_bn254.NewG1Affine(receivers[1].bn254PK),
+		RecvDeltaC10: sw_bn254.NewG1Affine(recvDeltaC1[0]),
+		RecvDeltaC20: sw_bn254.NewG1Affine(recvDeltaC2[0]),
+		RecvDeltaC11: sw_bn254.NewG1Affine(recvDeltaC1[1]),
+		RecvDeltaC21: sw_bn254.NewG1Affine(recvDeltaC2[1]),
+	}
+	logf("Proving ring transfer: %s→%s (senderIdx=%d recvIdx=%d amount=%d)…",
+		realSender.name, realRecv.name, senderIdx, recvIdx, amount)
+	proofA, proofB, proofC, commitB, commitHash := proveCircuit(transferCCS, transferPK, xferWitness)
+
+	sig := sendAndConfirm(client, payer,
+		ixSetComputeUnitLimit(1_400_000),
+		ixRingTransfer(
+			programID,
+			senders[0].pda, senders[1].pda,
+			receivers[0].pda, receivers[1].pda,
+			proofA, proofB, proofC, commitB, commitHash,
+			g1Bytes(&senderNewC1[0]), g1Bytes(&senderNewC2[0]),
+			g1Bytes(&senderNewC1[1]), g1Bytes(&senderNewC2[1]),
+			g1Bytes(&recvDeltaC1[0]), g1Bytes(&recvDeltaC2[0]),
+			g1Bytes(&recvDeltaC1[1]), g1Bytes(&recvDeltaC2[1]),
+		))
+	logComputeUnits(client, sig)
+
+	// Update in-memory ciphertext state
+	senders[0].c1 = senderNewC1[0]
+	senders[0].c2 = senderNewC2[0]
+	senders[1].c1 = senderNewC1[1]
+	senders[1].c2 = senderNewC2[1]
+	senders[senderIdx].balance = newBalance
+
+	receivers[0].c1 = addG1(receivers[0].c1, recvDeltaC1[0])
+	receivers[0].c2 = addG1(receivers[0].c2, recvDeltaC2[0])
+	receivers[1].c1 = addG1(receivers[1].c1, recvDeltaC1[1])
+	receivers[1].c2 = addG1(receivers[1].c2, recvDeltaC2[1])
+	receivers[recvIdx].balance += amount
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -81,13 +330,6 @@ func readLocalEnv() map[string]string {
 	return env
 }
 
-func writeLocalEnv(programID, transferSig string) {
-	content := fmt.Sprintf("PROGRAM_ID=%s\nRING_TRANSFER_SIG=%s\n", programID, transferSig)
-	if err := os.WriteFile("local.env", []byte(content), 0644); err != nil {
-		logf("warning: could not write local.env: %v", err)
-	}
-}
-
 func loadPK(path string) groth16.ProvingKey {
 	pk := groth16.NewProvingKey(ecc.BN254)
 	f, err := os.Open(path)
@@ -101,7 +343,6 @@ func loadPK(path string) groth16.ProvingKey {
 	return pk
 }
 
-
 func compileCCS(c frontend.Circuit) constraint.ConstraintSystem {
 	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, c)
 	if err != nil {
@@ -112,7 +353,6 @@ func compileCCS(c frontend.Circuit) constraint.ConstraintSystem {
 
 // committedIndices returns the 1-indexed public witness positions that gnark
 // includes in the BSB22 commit_hash prehash for this circuit.
-// Equivalent to vk.PublicAndCommitmentCommitted[0] without running Setup.
 func committedIndices(ccs constraint.ConstraintSystem) []int {
 	commits := ccs.GetCommitments().(constraint.Groth16Commitments)
 	pacc := commits.GetPublicAndCommitmentCommitted(commits.CommitmentIndexes(), ccs.GetNbPublicVariables())
@@ -150,14 +390,11 @@ func proveCircuit(
 	}
 	pubVec := pubWitness.Vector().(bn254fr.Vector)
 
-	// Compute commit_hash exactly as gnark's verifier does:
-	// only include the public witnesses listed in PublicAndCommitmentCommitted[0]
-	// (1-indexed into pubVec).
 	committed := committedIndices(ccs)
 	prehash := make([]byte, 64+len(committed)*32)
 	copy(prehash[:64], commitB[:])
 	for j, idx := range committed {
-		b := pubVec[idx-1].Bytes() // idx is 1-indexed
+		b := pubVec[idx-1].Bytes()
 		copy(prehash[64+j*32:], b[:])
 	}
 	h := hash_to_field.New([]byte(constraint.CommitmentDst))
@@ -199,337 +436,85 @@ func main() {
 
 	// ── 1. Load proving keys ──────────────────────────────────────────────────
 	logf("Loading proving keys…")
-	depositPK  := loadPK(depositPKPath)
+	depositPK := loadPK(depositPKPath)
 	transferPK := loadPK(transferPKPath)
 	withdrawPK := loadPK(withdrawPKPath)
 
 	// ── 2. Compile circuits ───────────────────────────────────────────────────
 	logf("Compiling circuits…")
-	depositCCS  := compileCCS(&xfer.DepositCircuit{})
+	depositCCS := compileCCS(&xfer.DepositCircuit{})
 	transferCCS := compileCCS(&xfer.RingTransferCircuit{})
 	withdrawCCS := compileCCS(&xfer.WithdrawCircuit{})
 
 	// ── 3. Build BSGS table ───────────────────────────────────────────────────
-	_, _, g1gen, _ := bn254.Generators()
-	G := g1gen
-
 	logf("Building BSGS table (range 0..2^32)…")
 	bsgs := buildBSGSTable(G)
 	logf("BSGS table ready (%d entries)", bsgsM)
 
-	// Arithmetic helpers
-	randFr := func() bn254fr.Element {
-		var e bn254fr.Element
-		if _, err := e.SetRandom(); err != nil {
-			fatalf("random Fr: %v", err)
-		}
-		return e
-	}
-	mul := func(p bn254.G1Affine, s bn254fr.Element) bn254.G1Affine {
-		var n big.Int
-		s.BigInt(&n)
-		var r bn254.G1Affine
-		r.ScalarMultiplication(&p, &n)
-		return r
-	}
-	add := func(a, b bn254.G1Affine) bn254.G1Affine {
-		var r bn254.G1Affine
-		r.Add(&a, &b)
-		return r
-	}
-	toFr := func(v uint64) bn254fr.Element {
-		var e bn254fr.Element
-		e.SetUint64(v)
-		return e
-	}
+	// ── 4. Create users ───────────────────────────────────────────────────────
+	alice := newUser("Alice", programID)
+	bob := newUser("Bob", programID)
+	carol := newUser("Carol", programID)
+	dave := newUser("Dave", programID)
+	users := []*User{alice, bob, carol, dave}
 
-	// ── 4. Generate keys ──────────────────────────────────────────────────────
-	senderSk    := randFr()
-	decoySk     := randFr()
-	recvSk      := randFr()
-	decoyRecvSk := randFr()
-
-	senderPk    := mul(G, senderSk)
-	decoySenderPk := mul(G, decoySk)
-	recvPk      := mul(G, recvSk)
-	decoyRecvPk := mul(G, decoyRecvSk)
-
-	// ── 5. Build deposit parameters ───────────────────────────────────────────
-	// Deposit: prove deltaC1 = rDep*G, deltaC2 = rDep*senderPk + depositAmount*G
-	rDep        := randFr()
-	depDeltaC1  := mul(G, rDep)
-	depDeltaC2  := add(mul(senderPk, rDep), mul(G, toFr(uint64(depositAmount))))
-
-	// After deposit from zero ciphertext:
-	//   senderPDA.c1 = depDeltaC1, senderPDA.c2 = depDeltaC2
-	realOldC1 := depDeltaC1
-	realOldC2 := depDeltaC2
-
-	// ── 6. Build ring transfer parameters ────────────────────────────────────
-	// Sender ring (2 members; slot 0 = real sender, balance=depositAmount)
-	rNew   := randFr()
-	rDecoy := randFr()
-
-	realNewC1 := mul(G, rNew)
-	realNewC2 := add(mul(senderPk, rNew), mul(G, toFr(uint64(depositAmount-transferAmount)))) // 600
-
-	// Decoy sender: CreateAccount with a pre-built ciphertext encrypting depositAmount
-	decoyRand  := randFr()
-	decoyOldC1 := mul(G, decoyRand)
-	decoyOldC2 := add(mul(decoySenderPk, decoyRand), mul(G, toFr(uint64(depositAmount))))
-	decoyNewC1 := add(decoyOldC1, mul(G, rDecoy))
-	decoyNewC2 := add(decoyOldC2, mul(decoySenderPk, rDecoy))
-
-	// Receiver ring (2 members; slot 0 = real receiver starting from zero)
-	rT    := randFr()
-	rRecv := randFr()
-
-	transferC1  := mul(G, rT)
-	transferC2  := add(mul(recvPk, rT), mul(G, toFr(uint64(transferAmount)))) // 400 to real recv
-	decoyDeltaC1 := mul(G, rRecv)
-	decoyDeltaC2 := mul(decoyRecvPk, rRecv) // 0 to decoy recv
-
-	// ── 7. Build withdraw parameters ─────────────────────────────────────────
-	// After ring transfer from zero ciphertext, recvPDA.c1/c2 = transferC1/C2.
-	// Receiver proves: old_balance=transferAmount, amount=withdrawAmount, new_balance=recvNewBalance.
-	rWd      := randFr()
-	recvNewC1 := mul(G, rWd)
-	recvNewC2 := add(mul(recvPk, rWd), mul(G, toFr(uint64(recvNewBalance)))) // 100
-
-	// ── 8. Prove deposit ──────────────────────────────────────────────────────
-	logf("Proving deposit (depositAmount=%d)…", depositAmount)
-	var rDepInt big.Int
-	rDep.BigInt(&rDepInt)
-	depWitness := &xfer.DepositCircuit{
-		R:       emulated.ValueOf[sw_bn254.ScalarField](&rDepInt),
-		Pk:      sw_bn254.NewG1Affine(senderPk),
-		DeltaC1: sw_bn254.NewG1Affine(depDeltaC1),
-		DeltaC2: sw_bn254.NewG1Affine(depDeltaC2),
-		Amount:  depositAmount,
-	}
-	depProofA, depProofB, depProofC, depCommitB, depCommitHash := proveCircuit(depositCCS, depositPK, depWitness)
-	logf("  deposit commitment: %x…", depCommitHash[:8])
-
-	// ── 9. Prove ring transfer ────────────────────────────────────────────────
-	logf("Proving ring transfer (amount=%d, senderIdx=0, recvIdx=0)…", transferAmount)
-	var skInt, rNewInt, rDecoyInt, rTInt, rRecvInt big.Int
-	senderSk.BigInt(&skInt)
-	rNew.BigInt(&rNewInt)
-	rDecoy.BigInt(&rDecoyInt)
-	rT.BigInt(&rTInt)
-	rRecv.BigInt(&rRecvInt)
-
-	xferWitness := &xfer.RingTransferCircuit{
-		Sk:        emulated.ValueOf[sw_bn254.ScalarField](&skInt),
-		RNew:      emulated.ValueOf[sw_bn254.ScalarField](&rNewInt),
-		RDecoy:    emulated.ValueOf[sw_bn254.ScalarField](&rDecoyInt),
-		RT:        emulated.ValueOf[sw_bn254.ScalarField](&rTInt),
-		RRecv:     emulated.ValueOf[sw_bn254.ScalarField](&rRecvInt),
-		B:         depositAmount,
-		V:         transferAmount,
-		BmV:       depositAmount - transferAmount,
-		SenderIdx: 0,
-		RecvIdx:   0,
-
-		SenderPk0:    sw_bn254.NewG1Affine(senderPk),
-		SenderPk1:    sw_bn254.NewG1Affine(decoySenderPk),
-		SenderOldC10: sw_bn254.NewG1Affine(realOldC1),
-		SenderOldC11: sw_bn254.NewG1Affine(decoyOldC1),
-		SenderOldC20: sw_bn254.NewG1Affine(realOldC2),
-		SenderOldC21: sw_bn254.NewG1Affine(decoyOldC2),
-		SenderNewC10: sw_bn254.NewG1Affine(realNewC1),
-		SenderNewC11: sw_bn254.NewG1Affine(decoyNewC1),
-		SenderNewC20: sw_bn254.NewG1Affine(realNewC2),
-		SenderNewC21: sw_bn254.NewG1Affine(decoyNewC2),
-
-		RecvPk0:      sw_bn254.NewG1Affine(recvPk),
-		RecvPk1:      sw_bn254.NewG1Affine(decoyRecvPk),
-		RecvDeltaC10: sw_bn254.NewG1Affine(transferC1),
-		RecvDeltaC20: sw_bn254.NewG1Affine(transferC2),
-		RecvDeltaC11: sw_bn254.NewG1Affine(decoyDeltaC1),
-		RecvDeltaC21: sw_bn254.NewG1Affine(decoyDeltaC2),
-	}
-	xferProofA, xferProofB, xferProofC, xferCommitB, xferCommitHash := proveCircuit(transferCCS, transferPK, xferWitness)
-	logf("  transfer commitment: %x…", xferCommitHash[:8])
-
-	// ── 10. Prove withdraw ────────────────────────────────────────────────────
-	logf("Proving withdraw (amount=%d, remainingBalance=%d)…", withdrawAmount, recvNewBalance)
-	var recvSkInt, rWdInt big.Int
-	recvSk.BigInt(&recvSkInt)
-	rWd.BigInt(&rWdInt)
-	wdWitness := &xfer.WithdrawCircuit{
-		Sk:         emulated.ValueOf[sw_bn254.ScalarField](&recvSkInt),
-		RNew:       emulated.ValueOf[sw_bn254.ScalarField](&rWdInt),
-		OldBalance: transferAmount,
-		NewBalance: recvNewBalance,
-		Pk:         sw_bn254.NewG1Affine(recvPk),
-		OldC1:      sw_bn254.NewG1Affine(transferC1),
-		OldC2:      sw_bn254.NewG1Affine(transferC2),
-		NewC1:      sw_bn254.NewG1Affine(recvNewC1),
-		NewC2:      sw_bn254.NewG1Affine(recvNewC2),
-		Amount:     withdrawAmount,
-	}
-	wdProofA, wdProofB, wdProofC, wdCommitB, wdCommitHash := proveCircuit(withdrawCCS, withdrawPK, wdWitness)
-	logf("  withdraw commitment: %x…", wdCommitHash[:8])
-
-	// ── 11. Serialise point bytes ─────────────────────────────────────────────
-	senderPkB    := g1Bytes(&senderPk)
-	decoySenderPkB := g1Bytes(&decoySenderPk)
-	recvPkB     := g1Bytes(&recvPk)
-	decoyRecvPkB := g1Bytes(&decoyRecvPk)
-
-	depDeltaC1B := g1Bytes(&depDeltaC1)
-	depDeltaC2B := g1Bytes(&depDeltaC2)
-
-	realNewC1B  := g1Bytes(&realNewC1)
-	realNewC2B  := g1Bytes(&realNewC2)
-	decoyNewC1B := g1Bytes(&decoyNewC1)
-	decoyNewC2B := g1Bytes(&decoyNewC2)
-
-	transferC1B  := g1Bytes(&transferC1)
-	transferC2B  := g1Bytes(&transferC2)
-	decoyDeltaC1B := g1Bytes(&decoyDeltaC1)
-	decoyDeltaC2B := g1Bytes(&decoyDeltaC2)
-
-	recvNewC1B := g1Bytes(&recvNewC1)
-	recvNewC2B := g1Bytes(&recvNewC2)
-
-	decoyOldC1B := g1Bytes(&decoyOldC1)
-	decoyOldC2B := g1Bytes(&decoyOldC2)
-
-	// ── 12. Derive PDAs ───────────────────────────────────────────────────────
+	// ── 5. Derive vault PDA ───────────────────────────────────────────────────
 	vaultPDA, _, err := solanago.FindProgramAddress([][]byte{[]byte("vault")}, programID)
 	if err != nil {
 		fatalf("vault PDA: %v", err)
 	}
 	logf("Vault PDA: %s", vaultPDA)
 
-	senderPDA0, _, err := solanago.FindProgramAddress([][]byte{senderPkB[:32]}, programID)
-	if err != nil {
-		fatalf("sender PDA 0: %v", err)
-	}
-	senderPDA1, _, err := solanago.FindProgramAddress([][]byte{decoySenderPkB[:32]}, programID)
-	if err != nil {
-		fatalf("sender PDA 1: %v", err)
-	}
-	recvPDA0, _, err := solanago.FindProgramAddress([][]byte{recvPkB[:32]}, programID)
-	if err != nil {
-		fatalf("recv PDA 0: %v", err)
-	}
-	recvPDA1, _, err := solanago.FindProgramAddress([][]byte{decoyRecvPkB[:32]}, programID)
-	if err != nil {
-		fatalf("recv PDA 1: %v", err)
-	}
-	logf("Sender PDA 0 (real):  %s", senderPDA0)
-	logf("Sender PDA 1 (decoy): %s", senderPDA1)
-	logf("Recv   PDA 0 (real):  %s", recvPDA0)
-	logf("Recv   PDA 1 (decoy): %s", recvPDA1)
-
-	// ── 13. CreateAccount — all 4 ring members ────────────────────────────────
-	// Real sender and receivers start with zero ciphertext (identity point = all-zero bytes).
-	// Decoy sender is initialized with its pre-built ciphertext (no deposit needed).
+	// ── 6. CreateAccount — all 4 users ────────────────────────────────────────
 	var zeroPoint [64]byte
+	for _, u := range users {
+		logf("Creating account for %s…", u.name)
+		sendAndConfirm(client, payer,
+			ixCreateAccount(programID, payer.PublicKey(), u.pda,
+				u.pkBytes, zeroPoint, zeroPoint))
+	}
 
-	logf("Creating sender 0 (real, zero ciphertext)…")
-	sendAndConfirm(client, payer, ixCreateAccount(programID, payer.PublicKey(), senderPDA0,
-		senderPkB, zeroPoint, zeroPoint))
+	// ── 7. Deposit — each user deposits their initial balance ─────────────────
+	doDeposit(client, payer, programID, vaultPDA, alice, 1000, depositCCS, depositPK)
+	doDeposit(client, payer, programID, vaultPDA, bob, 800, depositCCS, depositPK)
+	doDeposit(client, payer, programID, vaultPDA, carol, 600, depositCCS, depositPK)
+	doDeposit(client, payer, programID, vaultPDA, dave, 400, depositCCS, depositPK)
 
-	logf("Creating sender 1 (decoy, balance=%d)…", depositAmount)
-	sendAndConfirm(client, payer, ixCreateAccount(programID, payer.PublicKey(), senderPDA1,
-		decoySenderPkB, decoyOldC1B, decoyOldC2B))
+	// ── 8. Ring transfers — all SenderIdx×RecvIdx combos ─────────────────────
+	// Sender ring: Alice(slot 0), Bob(slot 1)
+	// Receiver ring: Carol(slot 0), Dave(slot 1)
+	// Expected final: Alice=650, Bob=620, Carol=900, Dave=630
+	senders := [2]*User{alice, bob}
+	receivers := [2]*User{carol, dave}
 
-	logf("Creating receiver 0 (real, zero ciphertext)…")
-	sendAndConfirm(client, payer, ixCreateAccount(programID, payer.PublicKey(), recvPDA0,
-		recvPkB, zeroPoint, zeroPoint))
+	doRingTransfer(client, payer, programID, senders, receivers, 0, 0, 200, transferCCS, transferPK)
+	doRingTransfer(client, payer, programID, senders, receivers, 0, 1, 150, transferCCS, transferPK)
+	doRingTransfer(client, payer, programID, senders, receivers, 1, 0, 100, transferCCS, transferPK)
+	doRingTransfer(client, payer, programID, senders, receivers, 1, 1, 80, transferCCS, transferPK)
 
-	logf("Creating receiver 1 (decoy, zero ciphertext)…")
-	sendAndConfirm(client, payer, ixCreateAccount(programID, payer.PublicKey(), recvPDA1,
-		decoyRecvPkB, zeroPoint, zeroPoint))
+	// Verify tracked balances match expected
+	logf("Verifying tracked balances after transfers…")
+	checkBalance("Alice (tracked)", alice.balance, 650)
+	checkBalance("Bob   (tracked)", bob.balance, 620)
+	checkBalance("Carol (tracked)", carol.balance, 900)
+	checkBalance("Dave  (tracked)", dave.balance, 630)
 
-	// ── 14. Deposit — real sender deposits depositAmount lamports ─────────────
-	logf("Depositing %d lamports into vault (ZK proof verified on-chain)…", depositAmount)
-	sendAndConfirm(client, payer,
-		ixSetComputeUnitLimit(500_000),
-		ixDeposit(programID, payer.PublicKey(), senderPDA0, vaultPDA,
-			depProofA, depProofB, depProofC,
-			depCommitB, depCommitHash,
-			depDeltaC1B, depDeltaC2B,
-			uint64(depositAmount),
-		))
+	// ── 9. Withdraw — each user withdraws full balance ────────────────────────
+	doWithdraw(client, payer, programID, vaultPDA, alice, alice.balance, withdrawCCS, withdrawPK)
+	doWithdraw(client, payer, programID, vaultPDA, bob, bob.balance, withdrawCCS, withdrawPK)
+	doWithdraw(client, payer, programID, vaultPDA, carol, carol.balance, withdrawCCS, withdrawPK)
+	doWithdraw(client, payer, programID, vaultPDA, dave, dave.balance, withdrawCCS, withdrawPK)
 
-	// Check: sender 0 ciphertext should equal deposit delta
+	// ── 10. Verify final encrypted balances = 0 via BSGS ─────────────────────
+	logf("Decrypting final on-chain balances (expect all = 0)…")
 	ctx := context.Background()
-	senderData0 := mustGetAccountData(client, ctx, senderPDA0)
-	checkField("sender0 c1 after deposit", senderData0[64:128], depDeltaC1B[:])
-	checkField("sender0 c2 after deposit", senderData0[128:192], depDeltaC2B[:])
-
-	// ── 15. Ring Transfer ─────────────────────────────────────────────────────
-	logf("Ring transfer (amount=%d, ZK proof verified on-chain)…", transferAmount)
-	ringTransferSig := sendAndConfirm(client, payer,
-		ixSetComputeUnitLimit(1_400_000),
-		ixRingTransfer(
-			programID,
-			senderPDA0, senderPDA1,
-			recvPDA0, recvPDA1,
-			xferProofA, xferProofB, xferProofC,
-			xferCommitB, xferCommitHash,
-			realNewC1B, realNewC2B,
-			decoyNewC1B, decoyNewC2B,
-			transferC1B, transferC2B,
-			decoyDeltaC1B, decoyDeltaC2B,
-		))
-	logComputeUnits(client, ringTransferSig)
-	writeLocalEnv(programIDStr, ringTransferSig.String())
-
-	// ── 16. Withdraw — receiver withdraws withdrawAmount lamports from vault ──
-	// The vault holds the deposited lamports; the receiver's ZK proof entitles
-	// them to withdraw their share without revealing their identity.
-	logf("Withdrawing %d lamports from vault to receiver 0 (ZK proof verified on-chain)…", withdrawAmount)
-	sendAndConfirm(client, payer,
-		ixSetComputeUnitLimit(800_000),
-		ixWithdraw(programID, recvPDA0, vaultPDA, payer.PublicKey(),
-			wdProofA, wdProofB, wdProofC,
-			wdCommitB, wdCommitHash,
-			recvNewC1B, recvNewC2B,
-			uint64(withdrawAmount),
-		))
-
-	// ── 18. Verify on-chain ciphertext state ──────────────────────────────────
-	logf("Verifying on-chain ciphertext state…")
-
-	senderData0 = mustGetAccountData(client, ctx, senderPDA0)
-	checkField("sender0 c1 after transfer", senderData0[64:128], realNewC1B[:])
-	checkField("sender0 c2 after transfer", senderData0[128:192], realNewC2B[:])
-
-	senderData1 := mustGetAccountData(client, ctx, senderPDA1)
-	checkField("sender1 c1 after transfer", senderData1[64:128], decoyNewC1B[:])
-	checkField("sender1 c2 after transfer", senderData1[128:192], decoyNewC2B[:])
-
-	// Receiver 0 started at zero; delta added = transferC1/C2
-	recvData0 := mustGetAccountData(client, ctx, recvPDA0)
-	checkField("recv0 c1 after transfer", recvData0[64:128], recvNewC1B[:])
-	checkField("recv0 c2 after transfer", recvData0[128:192], recvNewC2B[:])
-
-	recvData1 := mustGetAccountData(client, ctx, recvPDA1)
-	checkField("recv1 c1 after transfer", recvData1[64:128], decoyDeltaC1B[:])
-	checkField("recv1 c2 after transfer", recvData1[128:192], decoyDeltaC2B[:])
-
-	// ── 19. Decrypt balances via BSGS ─────────────────────────────────────────
-	logf("Decrypting balances…")
-
-	s0C1 := g1FromBytes(senderData0[64:128])
-	s0C2 := g1FromBytes(senderData0[128:192])
-	s1C1 := g1FromBytes(senderData1[64:128])
-	s1C2 := g1FromBytes(senderData1[128:192])
-	r0C1 := g1FromBytes(recvData0[64:128])
-	r0C2 := g1FromBytes(recvData0[128:192])
-	r1C1 := g1FromBytes(recvData1[64:128])
-	r1C2 := g1FromBytes(recvData1[128:192])
-
-	checkBalance("sender0 (real)",  decryptBalance(s0C1, s0C2, senderSk,    &bsgs), depositAmount-transferAmount) // 600
-	checkBalance("sender1 (decoy)", decryptBalance(s1C1, s1C2, decoySk,     &bsgs), depositAmount)               // 1000
-	checkBalance("recv0   (real)",  decryptBalance(r0C1, r0C2, recvSk,      &bsgs), recvNewBalance)              // 100
-	checkBalance("recv1   (decoy)", decryptBalance(r1C1, r1C2, decoyRecvSk, &bsgs), 0)
+	for _, u := range users {
+		data := mustGetAccountData(client, ctx, u.pda)
+		c1 := g1FromBytes(data[64:128])
+		c2 := g1FromBytes(data[128:192])
+		got := decryptBalance(c1, c2, u.bn254SK, &bsgs)
+		checkBalance(u.name+" (on-chain)", got, 0)
+	}
 
 	logf("All checks passed ✓")
 }
@@ -569,15 +554,24 @@ func ixDeposit(
 ) solanago.Instruction {
 	data := make([]byte, 489)
 	off := 0
-	data[off] = 0x02; off++
-	copy(data[off:off+64], proofA[:]); off += 64
-	copy(data[off:off+128], proofB[:]); off += 128
-	copy(data[off:off+64], proofC[:]); off += 64
-	copy(data[off:off+64], commitment[:]); off += 64
-	copy(data[off:off+32], commitHash[:]); off += 32
-	copy(data[off:off+64], deltaC1[:]); off += 64
-	copy(data[off:off+64], deltaC2[:]); off += 64
-	binary.LittleEndian.PutUint64(data[off:off+8], amount); off += 8
+	data[off] = 0x02
+	off++
+	copy(data[off:off+64], proofA[:])
+	off += 64
+	copy(data[off:off+128], proofB[:])
+	off += 128
+	copy(data[off:off+64], proofC[:])
+	off += 64
+	copy(data[off:off+64], commitment[:])
+	off += 64
+	copy(data[off:off+32], commitHash[:])
+	off += 32
+	copy(data[off:off+64], deltaC1[:])
+	off += 64
+	copy(data[off:off+64], deltaC2[:])
+	off += 64
+	binary.LittleEndian.PutUint64(data[off:off+8], amount)
+	off += 8
 	if off != 489 {
 		panic(fmt.Sprintf("ixDeposit: expected 489 bytes, got %d", off))
 	}
@@ -613,20 +607,34 @@ func ixRingTransfer(
 ) solanago.Instruction {
 	data := make([]byte, 865)
 	off := 0
-	data[off] = 0x01; off++
-	copy(data[off:off+64], proofA[:]); off += 64
-	copy(data[off:off+128], proofB[:]); off += 128
-	copy(data[off:off+64], proofC[:]); off += 64
-	copy(data[off:off+64], commitment[:]); off += 64
-	copy(data[off:off+32], commitHash[:]); off += 32
-	copy(data[off:off+64], senderNewC10[:]); off += 64
-	copy(data[off:off+64], senderNewC20[:]); off += 64
-	copy(data[off:off+64], senderNewC11[:]); off += 64
-	copy(data[off:off+64], senderNewC21[:]); off += 64
-	copy(data[off:off+64], recvDeltaC10[:]); off += 64
-	copy(data[off:off+64], recvDeltaC20[:]); off += 64
-	copy(data[off:off+64], recvDeltaC11[:]); off += 64
-	copy(data[off:off+64], recvDeltaC21[:]); off += 64
+	data[off] = 0x01
+	off++
+	copy(data[off:off+64], proofA[:])
+	off += 64
+	copy(data[off:off+128], proofB[:])
+	off += 128
+	copy(data[off:off+64], proofC[:])
+	off += 64
+	copy(data[off:off+64], commitment[:])
+	off += 64
+	copy(data[off:off+32], commitHash[:])
+	off += 32
+	copy(data[off:off+64], senderNewC10[:])
+	off += 64
+	copy(data[off:off+64], senderNewC20[:])
+	off += 64
+	copy(data[off:off+64], senderNewC11[:])
+	off += 64
+	copy(data[off:off+64], senderNewC21[:])
+	off += 64
+	copy(data[off:off+64], recvDeltaC10[:])
+	off += 64
+	copy(data[off:off+64], recvDeltaC20[:])
+	off += 64
+	copy(data[off:off+64], recvDeltaC11[:])
+	off += 64
+	copy(data[off:off+64], recvDeltaC21[:])
+	off += 64
 	if off != 865 {
 		panic(fmt.Sprintf("ixRingTransfer: expected 865 bytes, got %d", off))
 	}
@@ -654,15 +662,24 @@ func ixWithdraw(
 ) solanago.Instruction {
 	data := make([]byte, 489)
 	off := 0
-	data[off] = 0x03; off++
-	copy(data[off:off+64], proofA[:]); off += 64
-	copy(data[off:off+128], proofB[:]); off += 128
-	copy(data[off:off+64], proofC[:]); off += 64
-	copy(data[off:off+64], commitment[:]); off += 64
-	copy(data[off:off+32], commitHash[:]); off += 32
-	copy(data[off:off+64], newC1[:]); off += 64
-	copy(data[off:off+64], newC2[:]); off += 64
-	binary.LittleEndian.PutUint64(data[off:off+8], amount); off += 8
+	data[off] = 0x03
+	off++
+	copy(data[off:off+64], proofA[:])
+	off += 64
+	copy(data[off:off+128], proofB[:])
+	off += 128
+	copy(data[off:off+64], proofC[:])
+	off += 64
+	copy(data[off:off+64], commitment[:])
+	off += 64
+	copy(data[off:off+32], commitHash[:])
+	off += 32
+	copy(data[off:off+64], newC1[:])
+	off += 64
+	copy(data[off:off+64], newC2[:])
+	off += 64
+	binary.LittleEndian.PutUint64(data[off:off+8], amount)
+	off += 8
 	if off != 489 {
 		panic(fmt.Sprintf("ixWithdraw: expected 489 bytes, got %d", off))
 	}
@@ -771,15 +788,6 @@ func checkBalance(label string, got, want uint32) {
 		fatalf("BALANCE MISMATCH %s: got %d, want %d", label, got, want)
 	}
 	logf("  ✓ %s balance = %d", label, got)
-}
-
-func checkField(label string, got, want []byte) {
-	for i := range want {
-		if got[i] != want[i] {
-			fatalf("MISMATCH %s at byte %d: got %02x, want %02x", label, i, got[i], want[i])
-		}
-	}
-	logf("  ✓ %s", label)
 }
 
 // ── BN254 serialisation / BSGS helpers ───────────────────────────────────────

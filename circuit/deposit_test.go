@@ -44,14 +44,14 @@ func buildDepositWitness(
 	}
 
 	sk := toFr(pkSkBig)
-	r  := toFr(rBig)
+	r := toFr(rBig)
 
 	var amtFr bn254fr.Element
 	amtFr.SetUint64(uint64(amount))
 
-	pk       := mul(G, sk)
-	deltaC1  := mul(G, r)
-	deltaC2  := add(mul(pk, r), mul(G, amtFr)) // r*pk + amount*G
+	pk := mul(G, sk)
+	deltaC1 := mul(G, r)
+	deltaC2 := add(mul(pk, r), mul(G, amtFr)) // r*pk + amount*G
 
 	var rInt big.Int
 	r.BigInt(&rInt)
@@ -112,6 +112,25 @@ func TestDepositGroth16ProveVerify(t *testing.T) {
 		t.Fatalf("verify: %v", err)
 	}
 	t.Log("deposit proof verified ok")
+}
+
+// TestDepositCircuitZeroAmount verifies the circuit handles a zero-lamport
+// deposit (Amount=0), which previously caused a "no modular inverse" panic
+// in ScalarMulBase when the emulated scalar was zero.
+func TestDepositCircuitZeroAmount(t *testing.T) {
+	w := buildDepositWitness(t, dSkBig, dRBig, 0)
+
+	ccs, err := frontend.Compile(ecc.BN254.ScalarField(), r1cs.NewBuilder, &circuit.DepositCircuit{})
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	witness, err := frontend.NewWitness(w, ecc.BN254.ScalarField())
+	if err != nil {
+		t.Fatalf("witness: %v", err)
+	}
+	if err := ccs.IsSolved(witness); err != nil {
+		t.Fatalf("not satisfied: %v", err)
+	}
 }
 
 func TestDepositCircuitRejectsInvalidWitness(t *testing.T) {

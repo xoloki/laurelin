@@ -18,16 +18,18 @@ use solana_program::{
     account_info::AccountInfo,
     entrypoint::ProgramResult,
     msg,
+    program::{invoke, invoke_signed},
     program_error::ProgramError,
     pubkey::Pubkey,
     rent::Rent,
     system_instruction,
-    program::{invoke, invoke_signed},
     sysvar::Sysvar,
 };
 
 use groth16::{verify, VerificationKey};
-use instruction::{parse_create_account, parse_deposit, parse_ring_transfer, parse_withdraw, LaurelinInstruction};
+use instruction::{
+    parse_create_account, parse_deposit, parse_ring_transfer, parse_withdraw, LaurelinInstruction,
+};
 use state::{AccountState, G1Point};
 
 #[cfg(not(test))]
@@ -51,9 +53,15 @@ pub const G1_Y: [u8; 32] = {
 pub const GENERATOR: G1Point = {
     let mut g = [0u8; 64];
     let mut i = 0;
-    while i < 32 { g[i] = G1_X[i]; i += 1; }
+    while i < 32 {
+        g[i] = G1_X[i];
+        i += 1;
+    }
     let mut i = 0;
-    while i < 32 { g[32 + i] = G1_Y[i]; i += 1; }
+    while i < 32 {
+        g[32 + i] = G1_Y[i];
+        i += 1;
+    }
     g
 };
 
@@ -67,26 +75,26 @@ include!("withdraw_vk_generated.rs");
 #[cfg(test)]
 static TRANSFER_VK: VerificationKey = VerificationKey {
     alpha: [0u8; 64],
-    beta:  [0u8; 128],
+    beta: [0u8; 128],
     gamma: [0u8; 128],
     delta: [0u8; 128],
-    ic:    &[],
+    ic: &[],
 };
 #[cfg(test)]
 static DEPOSIT_VK: VerificationKey = VerificationKey {
     alpha: [0u8; 64],
-    beta:  [0u8; 128],
+    beta: [0u8; 128],
     gamma: [0u8; 128],
     delta: [0u8; 128],
-    ic:    &[],
+    ic: &[],
 };
 #[cfg(test)]
 static WITHDRAW_VK: VerificationKey = VerificationKey {
     alpha: [0u8; 64],
-    beta:  [0u8; 128],
+    beta: [0u8; 128],
     gamma: [0u8; 128],
     delta: [0u8; 128],
-    ic:    &[],
+    ic: &[],
 };
 
 pub fn process_instruction(
@@ -94,7 +102,8 @@ pub fn process_instruction(
     accounts: &[AccountInfo],
     instruction_data: &[u8],
 ) -> ProgramResult {
-    let (&opcode, rest) = instruction_data.split_first()
+    let (&opcode, rest) = instruction_data
+        .split_first()
         .ok_or(ProgramError::InvalidInstructionData)?;
     match opcode {
         0 => process_create_account(program_id, accounts, rest),
@@ -112,7 +121,9 @@ fn process_create_account(
 ) -> ProgramResult {
     let LaurelinInstruction::CreateAccount { pubkey, c1, c2 } =
         parse_create_account(data).ok_or(ProgramError::InvalidInstructionData)?
-    else { return Err(ProgramError::InvalidInstructionData) };
+    else {
+        return Err(ProgramError::InvalidInstructionData);
+    };
     if accounts.len() < 3 {
         return Err(ProgramError::NotEnoughAccountKeys);
     }
@@ -122,8 +133,7 @@ fn process_create_account(
 
     // PDA seed: first 32 bytes of the account's pubkey (the x coordinate)
     let seed = &pubkey[0..32];
-    let (expected_pda, bump) =
-        Pubkey::find_program_address(&[seed], program_id);
+    let (expected_pda, bump) = Pubkey::find_program_address(&[seed], program_id);
 
     if pda.key != &expected_pda {
         msg!("PDA mismatch");
@@ -159,14 +169,23 @@ fn process_ring_transfer(
     accounts: &[AccountInfo],
     data: &[u8],
 ) -> ProgramResult {
-    let LaurelinInstruction::RingTransfer { proof, commitment, commit_hash, sender_new_c1, sender_new_c2, recv_delta_c1, recv_delta_c2 } =
-        parse_ring_transfer(data).ok_or(ProgramError::InvalidInstructionData)?
-    else { return Err(ProgramError::InvalidInstructionData) };
+    let LaurelinInstruction::RingTransfer {
+        proof,
+        commitment,
+        commit_hash,
+        sender_new_c1,
+        sender_new_c2,
+        recv_delta_c1,
+        recv_delta_c2,
+    } = parse_ring_transfer(data).ok_or(ProgramError::InvalidInstructionData)?
+    else {
+        return Err(ProgramError::InvalidInstructionData);
+    };
     if accounts.len() < 4 {
         return Err(ProgramError::NotEnoughAccountKeys);
     }
     let sender_pda = [&accounts[0], &accounts[1]];
-    let recv_pda   = [&accounts[2], &accounts[3]];
+    let recv_pda = [&accounts[2], &accounts[3]];
 
     for pda in sender_pda.iter().chain(recv_pda.iter()) {
         if pda.owner != program_id {
@@ -231,20 +250,24 @@ fn process_ring_transfer(
 /// The vault PDA is created on first deposit if it does not yet exist.
 ///
 /// accounts: [payer (write, signer), pda (write), vault_pda (write), system_program]
-fn process_deposit(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    data: &[u8],
-) -> ProgramResult {
-    let LaurelinInstruction::Deposit { proof, commitment, commit_hash, delta_c1, delta_c2, amount } =
-        parse_deposit(data).ok_or(ProgramError::InvalidInstructionData)?
-    else { return Err(ProgramError::InvalidInstructionData) };
+fn process_deposit(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
+    let LaurelinInstruction::Deposit {
+        proof,
+        commitment,
+        commit_hash,
+        delta_c1,
+        delta_c2,
+        amount,
+    } = parse_deposit(data).ok_or(ProgramError::InvalidInstructionData)?
+    else {
+        return Err(ProgramError::InvalidInstructionData);
+    };
     if accounts.len() < 4 {
         return Err(ProgramError::NotEnoughAccountKeys);
     }
-    let payer          = &accounts[0];
-    let pda            = &accounts[1];
-    let vault_pda      = &accounts[2];
+    let payer = &accounts[0];
+    let pda = &accounts[1];
+    let vault_pda = &accounts[2];
     let system_program = &accounts[3];
 
     if pda.owner != program_id {
@@ -257,12 +280,11 @@ fn process_deposit(
         return Err(ProgramError::InvalidArgument);
     }
 
-    let state = AccountState::try_from_bytes(&pda.data.borrow())
-        .ok_or(ProgramError::InvalidAccountData)?;
+    let state =
+        AccountState::try_from_bytes(&pda.data.borrow()).ok_or(ProgramError::InvalidAccountData)?;
 
-    let public_inputs = build_deposit_public_inputs(
-        &state.pubkey, &delta_c1, &delta_c2, amount, &commit_hash,
-    );
+    let public_inputs =
+        build_deposit_public_inputs(&state.pubkey, &delta_c1, &delta_c2, amount, &commit_hash);
 
     let ok = verify(&DEPOSIT_VK, &proof, &public_inputs, &commitment)
         .map_err(|_| ProgramError::InvalidArgument)?;
@@ -287,10 +309,8 @@ fn process_deposit(
         &[payer.clone(), vault_pda.clone(), system_program.clone()],
     )?;
 
-    let new_c1 = bn254::g1_add(&state.c1, &delta_c1)
-        .map_err(|_| ProgramError::InvalidArgument)?;
-    let new_c2 = bn254::g1_add(&state.c2, &delta_c2)
-        .map_err(|_| ProgramError::InvalidArgument)?;
+    let new_c1 = bn254::g1_add(&state.c1, &delta_c1).map_err(|_| ProgramError::InvalidArgument)?;
+    let new_c2 = bn254::g1_add(&state.c2, &delta_c2).map_err(|_| ProgramError::InvalidArgument)?;
 
     let mut data = pda.data.borrow_mut();
     data[64..128].copy_from_slice(&new_c1);
@@ -341,19 +361,23 @@ fn build_deposit_public_inputs(
 /// old_balance − amount. Lamports are paid from the shared vault.
 ///
 /// accounts: [pda (write), vault_pda (write), destination (write)]
-fn process_withdraw(
-    program_id: &Pubkey,
-    accounts: &[AccountInfo],
-    data: &[u8],
-) -> ProgramResult {
-    let LaurelinInstruction::Withdraw { proof, commitment, commit_hash, new_c1, new_c2, amount } =
-        parse_withdraw(data).ok_or(ProgramError::InvalidInstructionData)?
-    else { return Err(ProgramError::InvalidInstructionData) };
+fn process_withdraw(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
+    let LaurelinInstruction::Withdraw {
+        proof,
+        commitment,
+        commit_hash,
+        new_c1,
+        new_c2,
+        amount,
+    } = parse_withdraw(data).ok_or(ProgramError::InvalidInstructionData)?
+    else {
+        return Err(ProgramError::InvalidInstructionData);
+    };
     if accounts.len() < 3 {
         return Err(ProgramError::NotEnoughAccountKeys);
     }
-    let pda         = &accounts[0];
-    let vault_pda   = &accounts[1];
+    let pda = &accounts[0];
+    let vault_pda = &accounts[1];
     let destination = &accounts[2];
 
     if pda.owner != program_id {
@@ -366,12 +390,11 @@ fn process_withdraw(
         return Err(ProgramError::InvalidArgument);
     }
 
-    let state = AccountState::try_from_bytes(&pda.data.borrow())
-        .ok_or(ProgramError::InvalidAccountData)?;
+    let state =
+        AccountState::try_from_bytes(&pda.data.borrow()).ok_or(ProgramError::InvalidAccountData)?;
 
-    let public_inputs = build_withdraw_public_inputs(
-        &state, &new_c1, &new_c2, amount, &commit_hash,
-    );
+    let public_inputs =
+        build_withdraw_public_inputs(&state, &new_c1, &new_c2, amount, &commit_hash);
 
     let ok = verify(&WITHDRAW_VK, &proof, &public_inputs, &commitment)
         .map_err(|_| ProgramError::InvalidArgument)?;
@@ -389,7 +412,7 @@ fn process_withdraw(
         return Err(ProgramError::InsufficientFunds);
     }
 
-    **vault_pda.lamports.borrow_mut()   -= amount;
+    **vault_pda.lamports.borrow_mut() -= amount;
     **destination.lamports.borrow_mut() += amount;
 
     let mut data = pda.data.borrow_mut();
@@ -415,13 +438,7 @@ fn build_withdraw_public_inputs(
 ) -> Vec<state::Scalar> {
     let mut inputs = Vec::with_capacity(42);
 
-    let points: [&G1Point; 5] = [
-        &state.pubkey,
-        &state.c1,
-        &state.c2,
-        new_c1,
-        new_c2,
-    ];
+    let points: [&G1Point; 5] = [&state.pubkey, &state.c1, &state.c2, new_c1, new_c2];
 
     for point in &points {
         for coord_off in [0usize, 32] {
@@ -459,7 +476,7 @@ fn build_withdraw_public_inputs(
 /// Total: 129 inputs, IC.len() = 130.
 fn build_ring_public_inputs(
     sender_state: &[AccountState; 2],
-    recv_state:   &[AccountState; 2],
+    recv_state: &[AccountState; 2],
     sender_new_c1: &[G1Point; 2],
     sender_new_c2: &[G1Point; 2],
     recv_delta_c1: &[G1Point; 2],
@@ -469,14 +486,22 @@ fn build_ring_public_inputs(
     let mut inputs = Vec::with_capacity(129);
 
     let points: [&G1Point; 16] = [
-        &sender_state[0].pubkey, &sender_state[1].pubkey,
-        &sender_state[0].c1,     &sender_state[1].c1,
-        &sender_state[0].c2,     &sender_state[1].c2,
-        &sender_new_c1[0],       &sender_new_c1[1],
-        &sender_new_c2[0],       &sender_new_c2[1],
-        &recv_state[0].pubkey,   &recv_state[1].pubkey,
-        &recv_delta_c1[0],       &recv_delta_c2[0],
-        &recv_delta_c1[1],       &recv_delta_c2[1],
+        &sender_state[0].pubkey,
+        &sender_state[1].pubkey,
+        &sender_state[0].c1,
+        &sender_state[1].c1,
+        &sender_state[0].c2,
+        &sender_state[1].c2,
+        &sender_new_c1[0],
+        &sender_new_c1[1],
+        &sender_new_c2[0],
+        &sender_new_c2[1],
+        &recv_state[0].pubkey,
+        &recv_state[1].pubkey,
+        &recv_delta_c1[0],
+        &recv_delta_c2[0],
+        &recv_delta_c1[1],
+        &recv_delta_c2[1],
     ];
 
     for point in &points {
@@ -505,7 +530,11 @@ mod tests {
     }
 
     fn make_state(pk: u8, c1: u8, c2: u8) -> state::AccountState {
-        state::AccountState { pubkey: make_point(pk), c1: make_point(c1), c2: make_point(c2) }
+        state::AccountState {
+            pubkey: make_point(pk),
+            c1: make_point(c1),
+            c2: make_point(c2),
+        }
     }
 
     #[test]
@@ -566,7 +595,7 @@ mod tests {
     fn public_inputs_count() {
         let z = [0u8; 64];
         let sender = [make_state(0, 0, 0), make_state(0, 0, 0)];
-        let recv   = [make_state(0, 0, 0), make_state(0, 0, 0)];
+        let recv = [make_state(0, 0, 0), make_state(0, 0, 0)];
         let inputs = build_ring_public_inputs(
             &sender, &recv, &[z; 2], &[z; 2], &[z; 2], &[z; 2], &[0u8; 32],
         );
@@ -577,11 +606,17 @@ mod tests {
     fn commit_hash_is_last() {
         let z = [0u8; 64];
         let sender = [make_state(0, 0, 0), make_state(0, 0, 0)];
-        let recv   = [make_state(0, 0, 0), make_state(0, 0, 0)];
+        let recv = [make_state(0, 0, 0), make_state(0, 0, 0)];
         let mut commit_hash = [0u8; 32];
         commit_hash[31] = 0xAB;
         let inputs = build_ring_public_inputs(
-            &sender, &recv, &[z; 2], &[z; 2], &[z; 2], &[z; 2], &commit_hash,
+            &sender,
+            &recv,
+            &[z; 2],
+            &[z; 2],
+            &[z; 2],
+            &[z; 2],
+            &commit_hash,
         );
         assert_eq!(inputs[128], commit_hash);
     }
@@ -593,7 +628,11 @@ mod tests {
         let mut pk = [0u8; 64];
         pk[31] = 0xAB;
         let sender = [
-            state::AccountState { pubkey: pk, c1: z, c2: z },
+            state::AccountState {
+                pubkey: pk,
+                c1: z,
+                c2: z,
+            },
             make_state(0, 0, 0),
         ];
         let recv = [make_state(0, 0, 0), make_state(0, 0, 0)];
@@ -614,7 +653,11 @@ mod tests {
         let mut pk = [0u8; 64];
         pk[0] = 0xCD; // most significant byte
         let sender = [
-            state::AccountState { pubkey: pk, c1: z, c2: z },
+            state::AccountState {
+                pubkey: pk,
+                c1: z,
+                c2: z,
+            },
             make_state(0, 0, 0),
         ];
         let recv = [make_state(0, 0, 0), make_state(0, 0, 0)];
@@ -636,27 +679,51 @@ mod tests {
         let z = [0u8; 64];
         // Give each of the 16 points a unique marker in X[31]
         let mut pts = [[0u8; 64]; 16];
-        for i in 0..16usize { pts[i][31] = (i + 1) as u8; }
+        for i in 0..16usize {
+            pts[i][31] = (i + 1) as u8;
+        }
 
         let sender = [
-            state::AccountState { pubkey: pts[0], c1: pts[2], c2: pts[4] },
-            state::AccountState { pubkey: pts[1], c1: pts[3], c2: pts[5] },
+            state::AccountState {
+                pubkey: pts[0],
+                c1: pts[2],
+                c2: pts[4],
+            },
+            state::AccountState {
+                pubkey: pts[1],
+                c1: pts[3],
+                c2: pts[5],
+            },
         ];
         let recv = [
-            state::AccountState { pubkey: pts[10], c1: z, c2: z },
-            state::AccountState { pubkey: pts[11], c1: z, c2: z },
+            state::AccountState {
+                pubkey: pts[10],
+                c1: z,
+                c2: z,
+            },
+            state::AccountState {
+                pubkey: pts[11],
+                c1: z,
+                c2: z,
+            },
         ];
         let inputs = build_ring_public_inputs(
-            &sender, &recv,
-            &[pts[6], pts[7]], &[pts[8], pts[9]],
-            &[pts[12], pts[14]], &[pts[13], pts[15]],
+            &sender,
+            &recv,
+            &[pts[6], pts[7]],
+            &[pts[8], pts[9]],
+            &[pts[12], pts[14]],
+            &[pts[13], pts[15]],
             &[0u8; 32],
         );
         // Each point i contributes 8 scalars; limb 0 of X is at inputs[i*8]
         for i in 0..16usize {
             assert_eq!(
-                inputs[i * 8][31], (i + 1) as u8,
-                "point {} should have marker {} at limb 0 of X", i, i + 1
+                inputs[i * 8][31],
+                (i + 1) as u8,
+                "point {} should have marker {} at limb 0 of X",
+                i,
+                i + 1
             );
         }
     }

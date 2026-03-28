@@ -64,7 +64,9 @@ mod tests {
     #[test]
     fn account_state_round_trip() {
         let mut data = [0u8; 192];
-        for i in 0..192 { data[i] = i as u8; }
+        for i in 0..192 {
+            data[i] = i as u8;
+        }
         let state = AccountState::try_from_bytes(&data).unwrap();
         assert_eq!(&state.pubkey[..], &data[0..64]);
         assert_eq!(&state.c1[..], &data[64..128]);
@@ -87,7 +89,9 @@ mod tests {
     #[test]
     fn groth16_proof_round_trip() {
         let mut data = [0u8; 256];
-        for i in 0..256 { data[i] = i as u8; }
+        for i in 0..256 {
+            data[i] = i as u8;
+        }
         let proof = Groth16Proof::try_from_bytes(&data).unwrap();
         assert_eq!(&proof.a[..], &data[0..64]);
         assert_eq!(&proof.b[..], &data[64..192]);

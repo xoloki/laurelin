@@ -6,3 +6,4 @@ circuit/client
 circuit/local.env
 accounts/
 ledger/
+*~
