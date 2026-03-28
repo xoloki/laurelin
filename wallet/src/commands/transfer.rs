@@ -167,6 +167,7 @@ pub fn run(
         "Proving ring transfer ({lamports} lamports, senderIdx={sender_idx} recvIdx={recv_idx})…"
     );
     let proof = prove_transfer(
+        &cfg.prover,
         pk_path_str,
         &sk,
         &r_new,

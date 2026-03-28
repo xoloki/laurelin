@@ -55,6 +55,7 @@ pub fn run(wallet: &Wallet, cfg: &ResolvedConfig, lamports: u64) -> anyhow::Resu
 
     eprintln!("Proving withdrawal ({lamports} lamports, remaining {new_balance})…");
     let proof = prove_withdraw(
+        &cfg.prover,
         pk_path_str,
         &sk,
         &r_new,

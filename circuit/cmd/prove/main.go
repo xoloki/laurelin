@@ -17,6 +17,9 @@ import (
 	"math/big"
 	"os"
 
+	"github.com/rs/zerolog"
+	"github.com/rs/zerolog/log"
+
 	"github.com/consensys/gnark-crypto/ecc"
 	"github.com/consensys/gnark-crypto/ecc/bn254"
 	"github.com/consensys/gnark-crypto/ecc/bn254/fp"
@@ -103,6 +106,9 @@ type ProverOutput struct {
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 func main() {
+	// Redirect gnark's zerolog output to stderr so stdout carries only the proof JSON.
+	log.Logger = log.Output(zerolog.ConsoleWriter{Out: os.Stderr})
+
 	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		die("read stdin: %v", err)

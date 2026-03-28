@@ -28,6 +28,7 @@ pub fn run(wallet: &Wallet, cfg: &ResolvedConfig, lamports: u64) -> anyhow::Resu
 
     eprintln!("Proving deposit ({lamports} lamports)…");
     let proof = prove_deposit(
+        &cfg.prover,
         pk_path_str,
         &r,
         &wallet.bn254_pk,

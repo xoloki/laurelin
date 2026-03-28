@@ -121,34 +121,49 @@ pub struct TransferWitness<'a> {
 
 // ── Prover call ───────────────────────────────────────────────────────────────
 
-/// Run `laurelin-prover`, write `witness_json` to its stdin, return proof.
-fn call_prover(witness_json: &str) -> anyhow::Result<ProofBytes> {
-    let mut child = Command::new("laurelin-prover")
+/// Run the prover binary, write `witness_json` to its stdin, return proof.
+fn call_prover(prover_bin: &str, witness_json: &str) -> anyhow::Result<ProofBytes> {
+    let mut child = Command::new(prover_bin)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::inherit()) // prover logs/errors visible to user
+        .stderr(Stdio::piped()) // capture stderr so we can include it in errors
         .spawn()
-        .context("spawn laurelin-prover (is it on PATH?)")?;
+        .with_context(|| format!("spawn {prover_bin} (is it on PATH?)"))?;
 
     child
         .stdin
         .take()
         .unwrap()
         .write_all(witness_json.as_bytes())
-        .context("write witness to laurelin-prover stdin")?;
+        .context("write witness to prover stdin")?;
 
-    let output = child
-        .wait_with_output()
-        .context("wait for laurelin-prover")?;
+    let output = child.wait_with_output().context("wait for prover")?;
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if !stderr.is_empty() {
+        eprint!("{stderr}");
+    }
 
     anyhow::ensure!(
         output.status.success(),
-        "laurelin-prover exited with status {}",
+        "prover exited with status {}\n{stderr}",
         output.status
     );
 
-    let raw: RawProofOutput =
-        serde_json::from_slice(&output.stdout).context("parse laurelin-prover output JSON")?;
+    // gnark may write log lines to stdout before the JSON; find the JSON line.
+    let json_line = output
+        .stdout
+        .split(|&b| b == b'\n')
+        .find(|line| line.starts_with(b"{"))
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no JSON found in prover stdout:\n{}",
+                String::from_utf8_lossy(&output.stdout)
+            )
+        })?;
+
+    let raw: RawProofOutput = serde_json::from_slice(json_line)
+        .with_context(|| format!("parse prover JSON: {}", String::from_utf8_lossy(json_line)))?;
     ProofBytes::from_raw(raw)
 }
 
@@ -156,6 +171,7 @@ fn call_prover(witness_json: &str) -> anyhow::Result<ProofBytes> {
 
 /// Prove a deposit.
 pub fn prove_deposit(
+    prover_bin: &str,
     pk_path: &str,
     r: &Fr,
     pk: &G1Affine,
@@ -172,12 +188,13 @@ pub fn prove_deposit(
         delta_c2: g1_to_hex(delta_c2),
         amount,
     };
-    call_prover(&serde_json::to_string(&w)?)
+    call_prover(prover_bin, &serde_json::to_string(&w)?)
 }
 
 /// Prove a withdrawal.
 #[allow(clippy::too_many_arguments)]
 pub fn prove_withdraw(
+    prover_bin: &str,
     pk_path: &str,
     sk: &Fr,
     r_new: &Fr,
@@ -204,12 +221,13 @@ pub fn prove_withdraw(
         new_c2: g1_to_hex(new_c2),
         amount,
     };
-    call_prover(&serde_json::to_string(&w)?)
+    call_prover(prover_bin, &serde_json::to_string(&w)?)
 }
 
 /// Prove a ring transfer.
 #[allow(clippy::too_many_arguments)]
 pub fn prove_transfer(
+    prover_bin: &str,
     pk_path: &str,
     sk: &Fr,
     r_new: &Fr,
@@ -260,5 +278,5 @@ pub fn prove_transfer(
         recv_delta_c1_1: g1_to_hex(recv_delta_c1[1]),
         recv_delta_c2_1: g1_to_hex(recv_delta_c2[1]),
     };
-    call_prover(&serde_json::to_string(&w)?)
+    call_prover(prover_bin, &serde_json::to_string(&w)?)
 }

@@ -91,6 +91,8 @@ enum ConfigCmd {
     SetUrl { url: String },
     /// Set the directory containing proving key files
     SetPkDir { path: String },
+    /// Set the prover binary name or path (default: laurelin-prover)
+    SetProver { name: String },
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
@@ -114,6 +116,7 @@ fn run() -> anyhow::Result<()> {
             ConfigCmd::SetProgram { id } => commands::config::set_program(&config_path, id),
             ConfigCmd::SetUrl { url } => commands::config::set_url(&config_path, url),
             ConfigCmd::SetPkDir { path } => commands::config::set_pk_dir(&config_path, path),
+            ConfigCmd::SetProver { name } => commands::config::set_prover(&config_path, name),
         };
     }
 
@@ -146,6 +149,10 @@ fn run() -> anyhow::Result<()> {
                         .as_deref()
                         .map(std::path::PathBuf::from)
                         .unwrap_or_else(|| std::path::PathBuf::from(".")),
+                    prover: cfg_file
+                        .prover
+                        .clone()
+                        .unwrap_or_else(|| "laurelin-prover".to_owned()),
                 }
             };
             let wallet = Wallet::load(&wallet_path)?;

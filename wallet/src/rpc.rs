@@ -2,9 +2,10 @@
 
 use anyhow::Context;
 use ark_bn254::G1Affine;
+use solana_account_decoder::UiAccountEncoding;
 use solana_client::{
     rpc_client::RpcClient,
-    rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig},
+    rpc_config::{RpcAccountInfoConfig, RpcProgramAccountsConfig, RpcSendTransactionConfig},
     rpc_filter::RpcFilterType,
 };
 use solana_sdk::{
@@ -15,6 +16,7 @@ use solana_sdk::{
     signature::{Keypair, Signature, Signer},
     transaction::Transaction,
 };
+use solana_transaction_status::UiTransactionEncoding;
 
 use crate::bn254::{g1_from_bytes, Ciphertext};
 
@@ -35,7 +37,15 @@ pub fn send_instructions(
     let msg = Message::new(instructions, Some(&payer.pubkey()));
     let tx = Transaction::new(&[payer], msg, blockhash);
     let sig = client
-        .send_and_confirm_transaction(&tx)
+        .send_and_confirm_transaction_with_spinner_and_config(
+            &tx,
+            CommitmentConfig::confirmed(),
+            RpcSendTransactionConfig {
+                encoding: Some(UiTransactionEncoding::Base64),
+                preflight_commitment: Some(CommitmentConfig::confirmed().commitment),
+                ..Default::default()
+            },
+        )
         .context("send transaction")?;
     Ok(sig)
 }
@@ -66,6 +76,7 @@ pub fn get_all_accounts(
     let config = RpcProgramAccountsConfig {
         filters: Some(vec![RpcFilterType::DataSize(192)]),
         account_config: RpcAccountInfoConfig {
+            encoding: Some(UiAccountEncoding::Base64),
             commitment: Some(CommitmentConfig::confirmed()),
             ..Default::default()
         },
