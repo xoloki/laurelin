@@ -24,6 +24,6 @@ fn stub_vk(path: &str, var_name: &str) {
 
 fn main() {
     stub_vk("src/transfer_vk_generated.rs", "TRANSFER_VK");
-    stub_vk("src/deposit_vk_generated.rs",  "DEPOSIT_VK");
+    stub_vk("src/deposit_vk_generated.rs", "DEPOSIT_VK");
     stub_vk("src/withdraw_vk_generated.rs", "WITHDRAW_VK");
 }
