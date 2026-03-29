@@ -20,7 +20,7 @@ pub fn run(wallet: &Wallet, cfg: &ResolvedConfig) -> anyhow::Result<()> {
         &program_id,
         &kp.pubkey(),
         &pda,
-        &wallet.bn254_pk_bytes,
+        &wallet.laurelin_pk_bytes,
         &zero,
         &zero,
     );

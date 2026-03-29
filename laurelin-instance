@@ -1,0 +1,7 @@
+#!/bin/bash
+
+base="$HOME/.laurelin"
+j=$1
+shift
+
+laurelin-wallet --config "$base/$j/config.json" --wallet "$base/$j/wallet.json" $@

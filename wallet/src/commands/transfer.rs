@@ -1,4 +1,4 @@
-//! `transfer <lamports> --to <pubkey-x-hex>` — confidential ring transfer.
+//! `transfer <lamports> --to <laurelin-pubkey>` — confidential ring transfer.
 //!
 //! Auto-discovers decoys from on-chain accounts.  Requires ≥ 4 accounts
 //! (self + receiver + 2 decoys).  SenderIdx and RecvIdx are randomised for
@@ -23,19 +23,20 @@ pub fn run(
     wallet: &Wallet,
     cfg: &ResolvedConfig,
     lamports: u64,
-    to_hex: &str,
+    to: &str,
 ) -> anyhow::Result<()> {
     let client = new_client(&cfg.rpc_url);
     let kp = wallet.solana_keypair()?;
     let program_id: Pubkey = cfg.program_id.parse()?;
     let my_pda = wallet.pda(&program_id);
-    let sk = wallet.bn254_sk_fr();
+    let sk = wallet.laurelin_sk_fr();
 
-    // Parse receiver BN254 pubkey X
-    let recv_pk_x: [u8; 32] = hex::decode(to_hex)
-        .map_err(|_| anyhow::anyhow!("--to must be a 64-char hex string (32 bytes)"))?
+    // Parse receiver Laurelin pubkey (base58-encoded 32-byte X coordinate)
+    let recv_pk_x: [u8; 32] = bs58::decode(to)
+        .into_vec()
+        .map_err(|_| anyhow::anyhow!("--to must be a valid Laurelin pubkey (base58)"))?
         .try_into()
-        .map_err(|_| anyhow::anyhow!("--to must be exactly 32 bytes"))?;
+        .map_err(|_| anyhow::anyhow!("--to Laurelin pubkey must be exactly 32 bytes"))?;
 
     // Get all accounts and find receiver + decoys
     let all_accounts = get_all_accounts(&client, &program_id)?;
@@ -46,8 +47,8 @@ pub fn run(
 
     for acc in all_accounts {
         use crate::bn254::fq_to_bytes;
-        let x_bytes = fq_to_bytes(&acc.bn254_pk.x);
-        if x_bytes == wallet.bn254_pk_bytes[..32] {
+        let x_bytes = fq_to_bytes(&acc.laurelin_pk.x);
+        if x_bytes == wallet.laurelin_pk_bytes[..32] {
             // this is self — we'll fetch fresh below
         } else if x_bytes == recv_pk_x {
             receiver_acc = Some(acc);
@@ -121,7 +122,7 @@ pub fn run(
     // Real sender: fresh ciphertext encrypting new_balance
     let sender_new_c1_real = scalar_mul(&g, &r_new);
     let sender_new_c2_real = point_add(
-        &scalar_mul(&my_account.bn254_pk, &r_new),
+        &scalar_mul(&my_account.laurelin_pk, &r_new),
         &scalar_mul(&g, &Fr::from(new_balance)),
     );
 
@@ -129,19 +130,21 @@ pub fn run(
     let decoy_old_c1 = decoy_sender.ciphertext.c1;
     let decoy_old_c2 = decoy_sender.ciphertext.c2;
     let sender_new_c1_decoy = point_add(&decoy_old_c1, &scalar_mul(&g, &r_decoy));
-    let sender_new_c2_decoy =
-        point_add(&decoy_old_c2, &scalar_mul(&decoy_sender.bn254_pk, &r_decoy));
+    let sender_new_c2_decoy = point_add(
+        &decoy_old_c2,
+        &scalar_mul(&decoy_sender.laurelin_pk, &r_decoy),
+    );
 
     // Real receiver: delta ciphertext encrypting amount
     let recv_delta_c1_real = scalar_mul(&g, &r_t);
     let recv_delta_c2_real = point_add(
-        &scalar_mul(&receiver_acc.bn254_pk, &r_t),
+        &scalar_mul(&receiver_acc.laurelin_pk, &r_t),
         &scalar_mul(&g, &Fr::from(lamports)),
     );
 
     // Decoy receiver: zero delta (re-randomized)
     let recv_delta_c1_decoy = scalar_mul(&g, &r_recv);
-    let recv_delta_c2_decoy = scalar_mul(&decoy_recv.bn254_pk, &r_recv);
+    let recv_delta_c2_decoy = scalar_mul(&decoy_recv.laurelin_pk, &r_recv);
 
     // Map to ring slots
     let mut sender_new_c1 = [G1Affine::default(); 2];
@@ -179,12 +182,12 @@ pub fn run(
         new_balance,
         sender_idx,
         recv_idx,
-        [&sender_accs[0].bn254_pk, &sender_accs[1].bn254_pk],
+        [&sender_accs[0].laurelin_pk, &sender_accs[1].laurelin_pk],
         [&sender_accs[0].ciphertext.c1, &sender_accs[1].ciphertext.c1],
         [&sender_accs[0].ciphertext.c2, &sender_accs[1].ciphertext.c2],
         [&sender_new_c1[0], &sender_new_c1[1]],
         [&sender_new_c2[0], &sender_new_c2[1]],
-        [&recv_accs[0].bn254_pk, &recv_accs[1].bn254_pk],
+        [&recv_accs[0].laurelin_pk, &recv_accs[1].laurelin_pk],
         [&recv_delta_c1[0], &recv_delta_c1[1]],
         [&recv_delta_c2[0], &recv_delta_c2[1]],
     )?;

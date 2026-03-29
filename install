@@ -4,3 +4,4 @@ cargo build -p laurelin-wallet --release
 pushd circuit; go build ./cmd/prove; popd
 cp target/release/laurelin-wallet ~/bin/
 cp circuit/prove ~/bin/laurelin-prover
+cp laurelin-instance ~/bin

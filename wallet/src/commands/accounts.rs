@@ -20,11 +20,11 @@ pub fn run(cfg: &ResolvedConfig) -> anyhow::Result<()> {
 
     println!("{} account(s) found:", accounts.len());
     for acc in &accounts {
-        let pk_x = fq_to_bytes(&acc.bn254_pk.x);
+        let pk_x = fq_to_bytes(&acc.laurelin_pk.x);
         println!(
-            "  PDA: {}  BN254 pubkey X: {}",
+            "  PDA: {}  Laurelin pubkey: {}",
             acc.pubkey,
-            hex::encode(pk_x)
+            bs58::encode(pk_x).into_string()
         );
     }
     Ok(())

@@ -55,8 +55,8 @@ pub fn send_instructions(
 #[allow(dead_code)]
 pub struct LaurelinkAccount {
     pub pubkey: Pubkey,
-    pub bn254_pk: G1Affine,
-    pub bn254_pk_bytes: [u8; 64],
+    pub laurelin_pk: G1Affine,
+    pub laurelin_pk_bytes: [u8; 64],
     pub ciphertext: Ciphertext,
 }
 
@@ -94,7 +94,7 @@ pub fn get_all_accounts(
 }
 
 /// Parse 192-byte Laurelin account data.
-/// Layout: bn254_pk(64) || c1(64) || c2(64)
+/// Layout: laurelin_pk(64) || c1(64) || c2(64)
 fn parse_account_data(pubkey: Pubkey, data: &[u8]) -> anyhow::Result<LaurelinkAccount> {
     anyhow::ensure!(
         data.len() >= 192,
@@ -111,17 +111,45 @@ fn parse_account_data(pubkey: Pubkey, data: &[u8]) -> anyhow::Result<LaurelinkAc
     let mut c2_bytes = [0u8; 64];
     c2_bytes.copy_from_slice(&data[128..192]);
 
-    let bn254_pk =
-        g1_from_bytes(&pk_bytes).with_context(|| format!("parse bn254_pk for {pubkey}"))?;
+    let laurelin_pk =
+        g1_from_bytes(&pk_bytes).with_context(|| format!("parse laurelin_pk for {pubkey}"))?;
     let c1 = g1_from_bytes(&c1_bytes).with_context(|| format!("parse c1 for {pubkey}"))?;
     let c2 = g1_from_bytes(&c2_bytes).with_context(|| format!("parse c2 for {pubkey}"))?;
 
     Ok(LaurelinkAccount {
         pubkey,
-        bn254_pk,
-        bn254_pk_bytes: pk_bytes,
+        laurelin_pk,
+        laurelin_pk_bytes: pk_bytes,
         ciphertext: Ciphertext { c1, c2 },
     })
+}
+
+/// Build, sign, and send a transaction with multiple signers.
+pub fn send_instructions_signed(
+    client: &RpcClient,
+    payer: &Keypair,
+    extra_signers: &[&Keypair],
+    instructions: &[Instruction],
+) -> anyhow::Result<Signature> {
+    let blockhash = client
+        .get_latest_blockhash()
+        .context("get latest blockhash")?;
+    let msg = Message::new(instructions, Some(&payer.pubkey()));
+    let mut all: Vec<&Keypair> = vec![payer];
+    all.extend_from_slice(extra_signers);
+    let tx = Transaction::new(&all, msg, blockhash);
+    let sig = client
+        .send_and_confirm_transaction_with_spinner_and_config(
+            &tx,
+            CommitmentConfig::confirmed(),
+            RpcSendTransactionConfig {
+                encoding: Some(UiTransactionEncoding::Base64),
+                preflight_commitment: Some(CommitmentConfig::confirmed().commitment),
+                ..Default::default()
+            },
+        )
+        .context("send transaction")?;
+    Ok(sig)
 }
 
 /// SOL balance in lamports.
