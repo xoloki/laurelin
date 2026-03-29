@@ -46,7 +46,11 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Generate a new Solana + BN254 keypair and save to the wallet file
-    Init,
+    Init {
+        /// Store keys in plaintext (no password). For testing only.
+        #[arg(long)]
+        insecure: bool,
+    },
 
     /// Show Solana pubkey and BN254 pubkey X coordinate
     Pubkey {
@@ -121,8 +125,8 @@ fn run() -> anyhow::Result<()> {
     }
 
     // Init doesn't need a pre-existing wallet or program
-    if let Commands::Init = cli.command {
-        return commands::init::run(&wallet_path);
+    if let Commands::Init { insecure } = cli.command {
+        return commands::init::run(&wallet_path, insecure);
     }
 
     // All other commands need a loaded config and wallet
@@ -194,6 +198,6 @@ fn run() -> anyhow::Result<()> {
             commands::withdraw::run(&wallet, &cfg, lamports)
         }
 
-        Commands::Init | Commands::Config(_) => unreachable!(),
+        Commands::Init { .. } | Commands::Config(_) => unreachable!(),
     }
 }

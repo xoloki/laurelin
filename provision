@@ -16,7 +16,7 @@ fi
 for ((i=1; i<=$1; i++)); do
     echo "run iteration $i"
     rm -rf  ~/.laurelin/$i
-    laurelin $i init
+    laurelin $i init --insecure
     laurelin $i config set-program 4eesfezqbNcYSJLmQqvxN38CdsccYGFYUaZdBgQp7a2L
     laurelin $i config set-pk-dir /Users/axoloki/src/laurelin/circuit/setup
 
