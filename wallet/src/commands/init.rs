@@ -17,20 +17,21 @@ pub fn run(wallet_path: &Path, insecure: bool) -> anyhow::Result<()> {
         );
     }
 
-    // Solana keypair
+    // Solana: generate keypair, extract the 32-byte Ed25519 seed
     let kp = Keypair::new();
-    let kp_bytes: [u8; 64] = kp.to_bytes();
+    let kp_bytes = kp.to_bytes(); // 64 bytes: seed (32) || pubkey (32)
+    let solana_sk: [u8; 32] = kp_bytes[..32].try_into().unwrap();
 
-    // BN254 secret key
+    // Laurelin: random BN254 scalar
     let mut rng = rand::thread_rng();
-    let sk = Fr::rand(&mut rng);
-    let sk_bytes = fr_to_bytes(&sk);
+    let laurelin_sk_fr = Fr::rand(&mut rng);
+    let laurelin_sk = fr_to_bytes(&laurelin_sk_fr);
 
     if insecure {
-        Wallet::save_plaintext(wallet_path, &kp_bytes, &sk_bytes)?;
+        Wallet::save_plaintext(wallet_path, &solana_sk, &laurelin_sk)?;
     } else {
         let password = prompt_new_password()?;
-        Wallet::save_encrypted(wallet_path, &kp_bytes, &sk_bytes, password.as_bytes())?;
+        Wallet::save_encrypted(wallet_path, &solana_sk, &laurelin_sk, password.as_bytes())?;
     }
 
     println!("Wallet created at {}", wallet_path.display());

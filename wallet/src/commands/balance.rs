@@ -17,7 +17,7 @@ pub fn run(wallet: &Wallet, cfg: &ResolvedConfig) -> anyhow::Result<()> {
     let kp = wallet.solana_keypair()?;
     let program_id: Pubkey = cfg.program_id.parse()?;
     let pda = wallet.pda(&program_id);
-    let sk = wallet.bn254_sk_fr();
+    let sk = wallet.laurelin_sk_fr();
 
     // SOL balance
     let lamports = get_sol_balance(&client, &kp.pubkey())?;

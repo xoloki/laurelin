@@ -19,7 +19,7 @@ pub fn run(wallet: &Wallet, cfg: &ResolvedConfig, lamports: u64) -> anyhow::Resu
     let program_id: Pubkey = cfg.program_id.parse()?;
     let pda = wallet.pda(&program_id);
     let vault = vault_pda(&program_id);
-    let sk = wallet.bn254_sk_fr();
+    let sk = wallet.laurelin_sk_fr();
 
     // Fetch current on-chain ciphertext
     let account = get_laurelin_account(&client, &pda)?;
@@ -44,7 +44,7 @@ pub fn run(wallet: &Wallet, cfg: &ResolvedConfig, lamports: u64) -> anyhow::Resu
     let g = generator();
     let new_c1 = scalar_mul(&g, &r_new);
     let new_c2 = point_add(
-        &scalar_mul(&wallet.bn254_pk, &r_new),
+        &scalar_mul(&wallet.laurelin_pk, &r_new),
         &scalar_mul(&g, &Fr::from(new_balance)),
     );
 
@@ -61,7 +61,7 @@ pub fn run(wallet: &Wallet, cfg: &ResolvedConfig, lamports: u64) -> anyhow::Resu
         &r_new,
         old_balance,
         new_balance,
-        &wallet.bn254_pk,
+        &wallet.laurelin_pk,
         &old_ct.c1,
         &old_ct.c2,
         &new_c1,

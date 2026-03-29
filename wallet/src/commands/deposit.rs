@@ -24,14 +24,14 @@ pub fn run(wallet: &Wallet, cfg: &ResolvedConfig, lamports: u64) -> anyhow::Resu
         .ok_or_else(|| anyhow::anyhow!("pk_dir path is not valid UTF-8"))?;
 
     // ElGamal encrypt the deposit amount
-    let (delta_ct, r) = elgamal_encrypt(&wallet.bn254_pk, lamports);
+    let (delta_ct, r) = elgamal_encrypt(&wallet.laurelin_pk, lamports);
 
     eprintln!("Proving deposit ({lamports} lamports)…");
     let proof = prove_deposit(
         &cfg.prover,
         pk_path_str,
         &r,
-        &wallet.bn254_pk,
+        &wallet.laurelin_pk,
         &delta_ct.c1,
         &delta_ct.c2,
         lamports,

@@ -52,15 +52,22 @@ enum Commands {
         insecure: bool,
     },
 
-    /// Show Solana pubkey and BN254 pubkey X coordinate
+    /// Show Solana pubkey and Laurelin pubkey
     Pubkey {
         /// Also show the Laurelin PDA
         #[arg(long)]
         verbose: bool,
+        /// Show only the Solana pubkey (no password needed)
+        #[arg(long)]
+        sol: bool,
     },
 
     /// Show SOL balance and confidential (encrypted) balance
-    Balance,
+    Balance {
+        /// Show only the SOL balance (no password needed)
+        #[arg(long)]
+        sol: bool,
+    },
 
     /// List all Laurelin accounts on-chain
     Accounts,
@@ -74,7 +81,7 @@ enum Commands {
     /// Confidential ring transfer to another account
     Transfer {
         lamports: u64,
-        /// Recipient's BN254 pubkey X coordinate (32-byte hex)
+        /// Recipient's Laurelin pubkey (base58, from `pubkey` command)
         #[arg(long)]
         to: String,
     },
@@ -82,9 +89,76 @@ enum Commands {
     /// Withdraw lamports from the confidential balance to SOL
     Withdraw { lamports: u64 },
 
+    /// Send SOL to another address
+    Send {
+        lamports: u64,
+        /// Recipient's Solana pubkey (base58)
+        #[arg(long)]
+        to: String,
+    },
+
+    /// List SPL token balances
+    TokenList,
+
+    /// Send SPL tokens to another address
+    TokenSend {
+        /// Token mint address (base58)
+        #[arg(long)]
+        mint: String,
+        /// Amount in base units (smallest denomination)
+        amount: u64,
+        /// Recipient's Solana pubkey (base58)
+        #[arg(long)]
+        to: String,
+    },
+
+    /// Close an empty SPL token account and reclaim rent
+    TokenClose {
+        /// Token mint address (base58)
+        #[arg(long)]
+        mint: String,
+    },
+
+    /// Native SOL staking operations
+    #[command(subcommand)]
+    Stake(StakeCmd),
+
+    /// Show recent transaction history
+    History {
+        /// Number of transactions to show (default: 20)
+        #[arg(long, default_value = "20")]
+        limit: usize,
+    },
+
     /// Manage config file settings
     #[command(subcommand)]
     Config(ConfigCmd),
+}
+
+#[derive(Subcommand)]
+enum StakeCmd {
+    /// Create and fund a new stake account
+    Create { lamports: u64 },
+    /// List your stake accounts
+    List,
+    /// Delegate a stake account to a validator
+    Delegate {
+        /// Stake account pubkey (base58)
+        stake: String,
+        /// Validator vote account pubkey (base58)
+        vote: String,
+    },
+    /// Begin deactivating a stake account
+    Deactivate {
+        /// Stake account pubkey (base58)
+        stake: String,
+    },
+    /// Withdraw lamports from a deactivated stake account
+    Withdraw {
+        /// Stake account pubkey (base58)
+        stake: String,
+        lamports: u64,
+    },
 }
 
 #[derive(Subcommand)]
@@ -134,7 +208,12 @@ fn run() -> anyhow::Result<()> {
     let cfg = ResolvedConfig::resolve(&cfg_file, cli.url.as_deref(), cli.program.as_deref());
 
     match cli.command {
-        Commands::Pubkey { verbose } => {
+        Commands::Pubkey { verbose, sol } => {
+            if sol {
+                let pubkey = Wallet::load_pubkey(&wallet_path)?;
+                println!("{pubkey}");
+                return Ok(());
+            }
             // pubkey doesn't strictly need program_id unless --verbose
             let cfg = if verbose {
                 cfg?
@@ -163,8 +242,19 @@ fn run() -> anyhow::Result<()> {
             commands::pubkey::run(&wallet, &cfg, verbose)
         }
 
-        Commands::Balance => {
+        Commands::Balance { sol } => {
             let cfg = cfg?;
+            if sol {
+                let pubkey = Wallet::load_pubkey(&wallet_path)?;
+                let client = rpc::new_client(&cfg.rpc_url);
+                let lamports = rpc::get_sol_balance(&client, &pubkey)?;
+                println!(
+                    "SOL balance: {} lamports  ({:.9} SOL)",
+                    lamports,
+                    lamports as f64 / 1e9
+                );
+                return Ok(());
+            }
             let wallet = Wallet::load(&wallet_path)?;
             commands::balance::run(&wallet, &cfg)
         }
@@ -196,6 +286,64 @@ fn run() -> anyhow::Result<()> {
             let cfg = cfg?;
             let wallet = Wallet::load(&wallet_path)?;
             commands::withdraw::run(&wallet, &cfg, lamports)
+        }
+
+        Commands::Send { lamports, to } => {
+            let cfg = cfg?;
+            let wallet = Wallet::load(&wallet_path)?;
+            commands::send::run(&wallet, &cfg, lamports, &to)
+        }
+
+        Commands::TokenList => {
+            let cfg = cfg?;
+            let pubkey = Wallet::load_pubkey(&wallet_path)?;
+            commands::token::run_list(&pubkey, &cfg)
+        }
+
+        Commands::TokenSend { mint, amount, to } => {
+            let cfg = cfg?;
+            let wallet = Wallet::load(&wallet_path)?;
+            commands::token::run_send(&wallet, &cfg, &mint, amount, &to)
+        }
+
+        Commands::TokenClose { mint } => {
+            let cfg = cfg?;
+            let wallet = Wallet::load(&wallet_path)?;
+            commands::token::run_close(&wallet, &cfg, &mint)
+        }
+
+        Commands::Stake(stake_cmd) => {
+            let cfg = cfg?;
+            match stake_cmd {
+                StakeCmd::List => {
+                    let pubkey = Wallet::load_pubkey(&wallet_path)?;
+                    commands::stake::run_list(&pubkey, &cfg)
+                }
+                _ => {
+                    let wallet = Wallet::load(&wallet_path)?;
+                    match stake_cmd {
+                        StakeCmd::Create { lamports } => {
+                            commands::stake::run_create(&wallet, &cfg, lamports)
+                        }
+                        StakeCmd::Delegate { stake, vote } => {
+                            commands::stake::run_delegate(&wallet, &cfg, &stake, &vote)
+                        }
+                        StakeCmd::Deactivate { stake } => {
+                            commands::stake::run_deactivate(&wallet, &cfg, &stake)
+                        }
+                        StakeCmd::Withdraw { stake, lamports } => {
+                            commands::stake::run_withdraw(&wallet, &cfg, &stake, lamports)
+                        }
+                        StakeCmd::List => unreachable!(),
+                    }
+                }
+            }
+        }
+
+        Commands::History { limit } => {
+            let cfg = cfg?;
+            let pubkey = Wallet::load_pubkey(&wallet_path)?;
+            commands::history::run(&pubkey, &cfg, limit)
         }
 
         Commands::Init { .. } | Commands::Config(_) => unreachable!(),
