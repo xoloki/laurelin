@@ -1,0 +1,31 @@
+//! `accounts` — list all Laurelin PDAs on-chain.
+
+use solana_sdk::pubkey::Pubkey;
+
+use crate::{
+    bn254::fq_to_bytes,
+    config::ResolvedConfig,
+    rpc::{get_all_accounts, new_client},
+};
+
+pub fn run(cfg: &ResolvedConfig) -> anyhow::Result<()> {
+    let client = new_client(&cfg.rpc_url);
+    let program_id: Pubkey = cfg.program_id.parse()?;
+    let accounts = get_all_accounts(&client, &program_id)?;
+
+    if accounts.is_empty() {
+        println!("No Laurelin accounts found.");
+        return Ok(());
+    }
+
+    println!("{} account(s) found:", accounts.len());
+    for acc in &accounts {
+        let pk_x = fq_to_bytes(&acc.bn254_pk.x);
+        println!(
+            "  PDA: {}  BN254 pubkey X: {}",
+            acc.pubkey,
+            hex::encode(pk_x)
+        );
+    }
+    Ok(())
+}

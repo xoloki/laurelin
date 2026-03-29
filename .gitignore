@@ -7,3 +7,4 @@ circuit/local.env
 accounts/
 ledger/
 *~
+circuit/prove
