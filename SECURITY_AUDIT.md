@@ -18,6 +18,8 @@ The ZK proof is intended to be the authorization mechanism — a valid proof imp
 
 The on-chain withdraw handler may allow an arbitrary destination account to be passed. If the program does not verify that destination == signer's Solana pubkey, a malicious RPC or MITM could substitute a different destination address.
 
+**Response (2026-03-30):** False positive. Solana transactions are signed with the payer's Ed25519 key over the entire instruction including all account addresses — a MITM cannot alter the destination without invalidating the signature. The legitimate concern (a compromised wallet client constructing the instruction with a wrong destination before signing) is out of scope for on-chain validation. **No issue.**
+
 ---
 
 ## Real Issues to Fix
@@ -57,7 +59,7 @@ These were flagged during review but appear safe by design:
 ## Remediation Order
 
 1. ~~Verify `transfer` circuit enforces prover knowledge of sender `sk`~~ — **C1 resolved**
-2. Verify / fix withdraw destination validation on-chain — **C2**
+2. ~~Verify / fix withdraw destination validation on-chain~~ — **C2 resolved (false positive)**
 3. Extend balance range checks from 32-bit to 40+ bits — **H1**
 4. Enforce `0600` permissions on wallet file — **L1**
 5. Switch salt/nonce generation to `OsRng` — **L2**
