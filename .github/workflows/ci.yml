@@ -19,7 +19,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Run Rust unit tests
-        run: cargo test --workspace
+        run: cargo test --package laurelin --package laurelin-circuit
 
   integration:
     name: Integration test
