@@ -1,282 +1,188 @@
-//! Interface to the `laurelin-prover` Go subprocess.
+//! In-process Groth16 proving via ark-groth16.
 //!
-//! The prover binary must be on PATH.  It reads a JSON witness from stdin and
-//! writes a proof JSON object to stdout.
+//! Proving keys are loaded from `.bin` files produced by the `laurelin-setup`
+//! binary (CanonicalSerialize format).  No subprocess or IPC needed.
 
-use std::io::Write;
-use std::process::{Command, Stdio};
+use std::fs;
+use std::path::Path;
 
 use anyhow::Context;
-use ark_bn254::{Fr, G1Affine};
-use serde::{Deserialize, Serialize};
+use ark_bn254::{Bn254, G1Affine, G2Affine};
+use ark_ed_on_bn254::{EdwardsAffine, Fr as BJJFr};
+use ark_ff::{BigInteger, PrimeField};
+use ark_groth16::{Groth16, ProvingKey};
+use ark_serialize::CanonicalDeserialize;
+use ark_snark::SNARK;
+use ark_std::rand::thread_rng;
 
-use crate::bn254::{fr_to_hex, g1_to_hex};
+use laurelin_circuit::{
+    deposit::DepositCircuit, transfer::RingTransferCircuit, withdraw::WithdrawCircuit,
+};
 
 // ── Proof result ──────────────────────────────────────────────────────────────
 
-/// Decoded output from laurelin-prover.
+/// Groth16 proof serialised for the Solana on-chain verifier.
+///
+/// Layout matches `Groth16Proof` in the on-chain program:
+///   proof_a (G1, 64B) || proof_b (G2, 128B) || proof_c (G1, 64B)
+/// Total: 256 bytes.  No BSB22 commitment.
 #[derive(Debug, Clone)]
 pub struct ProofBytes {
     pub proof_a: [u8; 64],
     pub proof_b: [u8; 128],
     pub proof_c: [u8; 64],
-    pub commitment: [u8; 64],
-    pub commit_hash: [u8; 32],
 }
 
-#[derive(Deserialize)]
-struct RawProofOutput {
-    proof_a: String,
-    proof_b: String,
-    proof_c: String,
-    commitment: String,
-    commit_hash: String,
+// ── Serialisation helpers ─────────────────────────────────────────────────────
+
+/// Serialise a G1Affine point to 64-byte X||Y (big-endian Fq coords).
+fn g1_to_bytes(p: &G1Affine) -> [u8; 64] {
+    let mut out = [0u8; 64];
+    let x = p.x.into_bigint().to_bytes_be();
+    let y = p.y.into_bigint().to_bytes_be();
+    out[32 - x.len()..32].copy_from_slice(&x);
+    out[64 - y.len()..64].copy_from_slice(&y);
+    out
 }
 
-impl ProofBytes {
-    fn from_raw(raw: RawProofOutput) -> anyhow::Result<Self> {
-        Ok(ProofBytes {
-            proof_a: decode_fixed::<64>(&raw.proof_a, "proof_a")?,
-            proof_b: decode_fixed::<128>(&raw.proof_b, "proof_b")?,
-            proof_c: decode_fixed::<64>(&raw.proof_c, "proof_c")?,
-            commitment: decode_fixed::<64>(&raw.commitment, "commitment")?,
-            commit_hash: decode_fixed::<32>(&raw.commit_hash, "commit_hash")?,
-        })
+/// Serialise a G2Affine point to 128-byte EIP-197 format:
+///   x.c1 || x.c0 || y.c1 || y.c0  (each 32 bytes, big-endian)
+fn g2_to_bytes(p: &G2Affine) -> [u8; 128] {
+    fn fq_be(f: &ark_bn254::Fq) -> [u8; 32] {
+        let b = f.into_bigint().to_bytes_be();
+        let mut out = [0u8; 32];
+        out[32 - b.len()..].copy_from_slice(&b);
+        out
+    }
+    let mut out = [0u8; 128];
+    out[0..32].copy_from_slice(&fq_be(&p.x.c1));
+    out[32..64].copy_from_slice(&fq_be(&p.x.c0));
+    out[64..96].copy_from_slice(&fq_be(&p.y.c1));
+    out[96..128].copy_from_slice(&fq_be(&p.y.c0));
+    out
+}
+
+fn proof_to_bytes(proof: &ark_groth16::Proof<Bn254>) -> ProofBytes {
+    ProofBytes {
+        proof_a: g1_to_bytes(&proof.a),
+        proof_b: g2_to_bytes(&proof.b),
+        proof_c: g1_to_bytes(&proof.c),
     }
 }
 
-fn decode_fixed<const N: usize>(s: &str, field: &str) -> anyhow::Result<[u8; N]> {
-    let bytes = hex::decode(s).with_context(|| format!("decode hex field {field}"))?;
-    bytes
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("field {field}: expected {} bytes", N))
+// ── Proving key loading ───────────────────────────────────────────────────────
+
+fn load_pk(path: &Path) -> anyhow::Result<ProvingKey<Bn254>> {
+    let data = fs::read(path).with_context(|| format!("read pk {}", path.display()))?;
+    ProvingKey::<Bn254>::deserialize_uncompressed(&*data)
+        .with_context(|| format!("deserialize pk {}", path.display()))
 }
 
-// ── Witness structs (serialised to JSON for the prover) ───────────────────────
-
-#[derive(Serialize)]
-pub struct DepositWitness<'a> {
-    pub circuit: &'static str,
-    pub pk_path: &'a str,
-    pub r: String,
-    pub pk: String,
-    pub delta_c1: String,
-    pub delta_c2: String,
-    pub amount: u64,
-}
-
-#[derive(Serialize)]
-pub struct WithdrawWitness<'a> {
-    pub circuit: &'static str,
-    pub pk_path: &'a str,
-    pub sk: String,
-    pub r_new: String,
-    pub old_balance: u64,
-    pub new_balance: u64,
-    pub pk: String,
-    pub old_c1: String,
-    pub old_c2: String,
-    pub new_c1: String,
-    pub new_c2: String,
-    pub amount: u64,
-}
-
-#[derive(Serialize)]
-pub struct TransferWitness<'a> {
-    pub circuit: &'static str,
-    pub pk_path: &'a str,
-
-    // Private witnesses
-    pub sk: String,
-    pub r_new: String,
-    pub r_decoy: String,
-    pub r_t: String,
-    pub r_recv: String,
-    pub b: u64,
-    pub v: u64,
-    pub bmv: u64,
-    pub sender_idx: usize,
-    pub recv_idx: usize,
-
-    // Sender ring public inputs
-    pub sender_pk_0: String,
-    pub sender_pk_1: String,
-    pub sender_old_c1_0: String,
-    pub sender_old_c1_1: String,
-    pub sender_old_c2_0: String,
-    pub sender_old_c2_1: String,
-    pub sender_new_c1_0: String,
-    pub sender_new_c1_1: String,
-    pub sender_new_c2_0: String,
-    pub sender_new_c2_1: String,
-
-    // Receiver ring public inputs
-    pub recv_pk_0: String,
-    pub recv_pk_1: String,
-    pub recv_delta_c1_0: String,
-    pub recv_delta_c2_0: String,
-    pub recv_delta_c1_1: String,
-    pub recv_delta_c2_1: String,
-}
-
-// ── Prover call ───────────────────────────────────────────────────────────────
-
-/// Run the prover binary, write `witness_json` to its stdin, return proof.
-fn call_prover(prover_bin: &str, witness_json: &str) -> anyhow::Result<ProofBytes> {
-    let mut child = Command::new(prover_bin)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped()) // capture stderr so we can include it in errors
-        .spawn()
-        .with_context(|| format!("spawn {prover_bin} (is it on PATH?)"))?;
-
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(witness_json.as_bytes())
-        .context("write witness to prover stdin")?;
-
-    let output = child.wait_with_output().context("wait for prover")?;
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if !stderr.is_empty() {
-        eprint!("{stderr}");
-    }
-
-    anyhow::ensure!(
-        output.status.success(),
-        "prover exited with status {}\n{stderr}",
-        output.status
-    );
-
-    // gnark may write log lines to stdout before the JSON; find the JSON line.
-    let json_line = output
-        .stdout
-        .split(|&b| b == b'\n')
-        .find(|line| line.starts_with(b"{"))
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "no JSON found in prover stdout:\n{}",
-                String::from_utf8_lossy(&output.stdout)
-            )
-        })?;
-
-    let raw: RawProofOutput = serde_json::from_slice(json_line)
-        .with_context(|| format!("parse prover JSON: {}", String::from_utf8_lossy(json_line)))?;
-    ProofBytes::from_raw(raw)
-}
-
-// ── Public helpers ────────────────────────────────────────────────────────────
+// ── Public prove functions ────────────────────────────────────────────────────
 
 /// Prove a deposit.
 pub fn prove_deposit(
-    prover_bin: &str,
-    pk_path: &str,
-    r: &Fr,
-    pk: &G1Affine,
-    delta_c1: &G1Affine,
-    delta_c2: &G1Affine,
+    pk_path: &Path,
+    r: &BJJFr,
+    pk: &EdwardsAffine,
+    delta_c1: &EdwardsAffine,
+    delta_c2: &EdwardsAffine,
     amount: u64,
 ) -> anyhow::Result<ProofBytes> {
-    let w = DepositWitness {
-        circuit: "deposit",
-        pk_path,
-        r: fr_to_hex(r),
-        pk: g1_to_hex(pk),
-        delta_c1: g1_to_hex(delta_c1),
-        delta_c2: g1_to_hex(delta_c2),
-        amount,
+    let proving_key = load_pk(pk_path)?;
+    let circuit = DepositCircuit {
+        r: Some(*r),
+        pk: Some(*pk),
+        delta_c1: Some(*delta_c1),
+        delta_c2: Some(*delta_c2),
+        amount: Some(amount as u32),
     };
-    call_prover(prover_bin, &serde_json::to_string(&w)?)
+    let mut rng = thread_rng();
+    let proof = Groth16::<Bn254>::prove(&proving_key, circuit, &mut rng)
+        .context("ark-groth16 deposit prove")?;
+    Ok(proof_to_bytes(&proof))
 }
 
 /// Prove a withdrawal.
 #[allow(clippy::too_many_arguments)]
 pub fn prove_withdraw(
-    prover_bin: &str,
-    pk_path: &str,
-    sk: &Fr,
-    r_new: &Fr,
+    pk_path: &Path,
+    sk: &BJJFr,
+    r_new: &BJJFr,
     old_balance: u64,
     new_balance: u64,
-    pk: &G1Affine,
-    old_c1: &G1Affine,
-    old_c2: &G1Affine,
-    new_c1: &G1Affine,
-    new_c2: &G1Affine,
+    pk: &EdwardsAffine,
+    old_c1: &EdwardsAffine,
+    old_c2: &EdwardsAffine,
+    new_c1: &EdwardsAffine,
+    new_c2: &EdwardsAffine,
     amount: u64,
 ) -> anyhow::Result<ProofBytes> {
-    let w = WithdrawWitness {
-        circuit: "withdraw",
-        pk_path,
-        sk: fr_to_hex(sk),
-        r_new: fr_to_hex(r_new),
-        old_balance,
-        new_balance,
-        pk: g1_to_hex(pk),
-        old_c1: g1_to_hex(old_c1),
-        old_c2: g1_to_hex(old_c2),
-        new_c1: g1_to_hex(new_c1),
-        new_c2: g1_to_hex(new_c2),
-        amount,
+    let proving_key = load_pk(pk_path)?;
+    let circuit = WithdrawCircuit {
+        sk: Some(*sk),
+        r_new: Some(*r_new),
+        old_balance: Some(old_balance as u32),
+        new_balance: Some(new_balance as u32),
+        pk: Some(*pk),
+        old_c1: Some(*old_c1),
+        old_c2: Some(*old_c2),
+        new_c1: Some(*new_c1),
+        new_c2: Some(*new_c2),
+        amount: Some(amount as u32),
     };
-    call_prover(prover_bin, &serde_json::to_string(&w)?)
+    let mut rng = thread_rng();
+    let proof = Groth16::<Bn254>::prove(&proving_key, circuit, &mut rng)
+        .context("ark-groth16 withdraw prove")?;
+    Ok(proof_to_bytes(&proof))
 }
 
-/// Prove a ring transfer.
+/// Prove a ring transfer (N=2).
 #[allow(clippy::too_many_arguments)]
 pub fn prove_transfer(
-    prover_bin: &str,
-    pk_path: &str,
-    sk: &Fr,
-    r_new: &Fr,
-    r_decoy: &Fr,
-    r_t: &Fr,
-    r_recv: &Fr,
+    pk_path: &Path,
+    sk: &BJJFr,
+    r_new: &BJJFr,
+    r_decoys: [BJJFr; 2],
+    r_t: &BJJFr,
+    r_recvs: [BJJFr; 2],
     b: u64,
     v: u64,
     bmv: u64,
     sender_idx: usize,
     recv_idx: usize,
-    sender_pks: [&G1Affine; 2],
-    sender_old_c1: [&G1Affine; 2],
-    sender_old_c2: [&G1Affine; 2],
-    sender_new_c1: [&G1Affine; 2],
-    sender_new_c2: [&G1Affine; 2],
-    recv_pks: [&G1Affine; 2],
-    recv_delta_c1: [&G1Affine; 2],
-    recv_delta_c2: [&G1Affine; 2],
+    sender_pks: [EdwardsAffine; 2],
+    sender_old_c1: [EdwardsAffine; 2],
+    sender_old_c2: [EdwardsAffine; 2],
+    sender_new_c1: [EdwardsAffine; 2],
+    sender_new_c2: [EdwardsAffine; 2],
+    recv_pks: [EdwardsAffine; 2],
+    recv_delta_c1: [EdwardsAffine; 2],
+    recv_delta_c2: [EdwardsAffine; 2],
 ) -> anyhow::Result<ProofBytes> {
-    let w = TransferWitness {
-        circuit: "transfer",
-        pk_path,
-        sk: fr_to_hex(sk),
-        r_new: fr_to_hex(r_new),
-        r_decoy: fr_to_hex(r_decoy),
-        r_t: fr_to_hex(r_t),
-        r_recv: fr_to_hex(r_recv),
-        b,
-        v,
-        bmv,
-        sender_idx,
-        recv_idx,
-        sender_pk_0: g1_to_hex(sender_pks[0]),
-        sender_pk_1: g1_to_hex(sender_pks[1]),
-        sender_old_c1_0: g1_to_hex(sender_old_c1[0]),
-        sender_old_c1_1: g1_to_hex(sender_old_c1[1]),
-        sender_old_c2_0: g1_to_hex(sender_old_c2[0]),
-        sender_old_c2_1: g1_to_hex(sender_old_c2[1]),
-        sender_new_c1_0: g1_to_hex(sender_new_c1[0]),
-        sender_new_c1_1: g1_to_hex(sender_new_c1[1]),
-        sender_new_c2_0: g1_to_hex(sender_new_c2[0]),
-        sender_new_c2_1: g1_to_hex(sender_new_c2[1]),
-        recv_pk_0: g1_to_hex(recv_pks[0]),
-        recv_pk_1: g1_to_hex(recv_pks[1]),
-        recv_delta_c1_0: g1_to_hex(recv_delta_c1[0]),
-        recv_delta_c2_0: g1_to_hex(recv_delta_c2[0]),
-        recv_delta_c1_1: g1_to_hex(recv_delta_c1[1]),
-        recv_delta_c2_1: g1_to_hex(recv_delta_c2[1]),
+    let proving_key = load_pk(pk_path)?;
+    let circuit = RingTransferCircuit::<2> {
+        sk: Some(*sk),
+        r_new: Some(*r_new),
+        r_decoys: [Some(r_decoys[0]), Some(r_decoys[1])],
+        r_t: Some(*r_t),
+        r_recvs: [Some(r_recvs[0]), Some(r_recvs[1])],
+        balance: Some(b as u32),
+        amount: Some(v as u32),
+        new_balance: Some(bmv as u32),
+        sender_idx: Some(sender_idx),
+        recv_idx: Some(recv_idx),
+        sender_pks: [Some(sender_pks[0]), Some(sender_pks[1])],
+        sender_old_c1: [Some(sender_old_c1[0]), Some(sender_old_c1[1])],
+        sender_old_c2: [Some(sender_old_c2[0]), Some(sender_old_c2[1])],
+        sender_new_c1: [Some(sender_new_c1[0]), Some(sender_new_c1[1])],
+        sender_new_c2: [Some(sender_new_c2[0]), Some(sender_new_c2[1])],
+        recv_pks: [Some(recv_pks[0]), Some(recv_pks[1])],
+        recv_delta_c1: [Some(recv_delta_c1[0]), Some(recv_delta_c1[1])],
+        recv_delta_c2: [Some(recv_delta_c2[0]), Some(recv_delta_c2[1])],
     };
-    call_prover(prover_bin, &serde_json::to_string(&w)?)
+    let mut rng = thread_rng();
+    let proof = Groth16::<Bn254>::prove(&proving_key, circuit, &mut rng)
+        .context("ark-groth16 transfer prove")?;
+    Ok(proof_to_bytes(&proof))
 }

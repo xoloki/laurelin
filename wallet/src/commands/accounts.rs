@@ -3,7 +3,7 @@
 use solana_sdk::pubkey::Pubkey;
 
 use crate::{
-    bn254::fq_to_bytes,
+    bjj::coord_to_bytes,
     config::ResolvedConfig,
     rpc::{get_all_accounts, new_client},
 };
@@ -20,7 +20,7 @@ pub fn run(cfg: &ResolvedConfig) -> anyhow::Result<()> {
 
     println!("{} account(s) found:", accounts.len());
     for acc in &accounts {
-        let pk_x = fq_to_bytes(&acc.laurelin_pk.x);
+        let pk_x = coord_to_bytes(&acc.laurelin_pk.x);
         println!(
             "  PDA: {}  Laurelin pubkey: {}",
             acc.pubkey,

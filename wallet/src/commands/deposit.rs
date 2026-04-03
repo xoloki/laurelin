@@ -3,7 +3,7 @@
 use solana_sdk::{pubkey::Pubkey, signature::Signer};
 
 use crate::{
-    bn254::{elgamal_encrypt, g1_to_bytes, MAX_CONFIDENTIAL_LAMPORTS},
+    bjj::{elgamal_encrypt, point_to_bytes, MAX_CONFIDENTIAL_LAMPORTS},
     config::ResolvedConfig,
     instructions::{deposit, set_compute_unit_limit, vault_pda},
     prover::prove_deposit,
@@ -25,17 +25,13 @@ pub fn run(wallet: &Wallet, cfg: &ResolvedConfig, lamports: u64) -> anyhow::Resu
     let vault = vault_pda(&program_id);
 
     let pk_path = cfg.pk_dir.join("deposit_pk.bin");
-    let pk_path_str = pk_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("pk_dir path is not valid UTF-8"))?;
 
     // ElGamal encrypt the deposit amount
     let (delta_ct, r) = elgamal_encrypt(&wallet.laurelin_pk, lamports);
 
     eprintln!("Proving deposit ({lamports} lamports)…");
     let proof = prove_deposit(
-        &cfg.prover,
-        pk_path_str,
+        &pk_path,
         &r,
         &wallet.laurelin_pk,
         &delta_ct.c1,
@@ -49,8 +45,8 @@ pub fn run(wallet: &Wallet, cfg: &ResolvedConfig, lamports: u64) -> anyhow::Resu
         &pda,
         &vault,
         &proof,
-        &g1_to_bytes(&delta_ct.c1),
-        &g1_to_bytes(&delta_ct.c2),
+        &point_to_bytes(&delta_ct.c1),
+        &point_to_bytes(&delta_ct.c2),
         lamports,
     );
 

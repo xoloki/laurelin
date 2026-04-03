@@ -56,17 +56,14 @@ pub fn bits_to_fpvar(bits: &[Boolean<Fr>]) -> FpVar<Fr> {
 
 /// Return the BJJ generator G as a constant circuit point.
 pub fn generator_var() -> EdwardsVar {
-    use ark_ed_on_bn254::{EdwardsAffine, EdwardsConfig};
     use ark_ec::twisted_edwards::TECurveConfig;
+    use ark_ed_on_bn254::{EdwardsAffine, EdwardsConfig};
     let g: EdwardsAffine = EdwardsConfig::GENERATOR;
     EdwardsVar::constant(g.into())
 }
 
 /// Scalar-multiply a point variable by LE bits: returns `point * scalar`.
-pub fn scalar_mul(
-    point: &EdwardsVar,
-    bits: &[Boolean<Fr>],
-) -> Result<EdwardsVar, SynthesisError> {
+pub fn scalar_mul(point: &EdwardsVar, bits: &[Boolean<Fr>]) -> Result<EdwardsVar, SynthesisError> {
     point.scalar_mul_le(bits.iter())
 }
 

@@ -6,7 +6,7 @@
 use solana_sdk::{pubkey::Pubkey, signature::Signer};
 
 use crate::{
-    bn254::{bsgs_decrypt, BsgsTable},
+    bjj::{bsgs_decrypt, BsgsTable},
     config::ResolvedConfig,
     rpc::{get_laurelin_account, get_sol_balance, new_client},
     wallet::Wallet,

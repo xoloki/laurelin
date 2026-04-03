@@ -15,9 +15,14 @@ anyhow = "1"
 hex = "0.4"
 rand = "0.8"
 ark-bn254 = "0.4"
+ark-ed-on-bn254 = { version = "0.4", features = ["r1cs"] }
 ark-ff = "0.4"
 ark-ec = "0.4"
 ark-std = { version = "0.4", features = ["std"] }
+ark-groth16 = "0.4"
+ark-snark = "0.4"
+ark-serialize = "0.4"
+laurelin-circuit = { path = "../circuit" }
 solana-client = "=1.18"
 solana-sdk = "=1.18"
 solana-transaction-status = "=1.18"

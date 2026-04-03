@@ -13,3 +13,10 @@ ark-relations  = "0.4"
 ark-r1cs-std   = "0.4"
 ark-groth16    = "0.4"
 ark-snark      = "0.4"
+ark-serialize  = "0.4"
+anyhow         = "1"
+rand           = "0.8"
+
+[[bin]]
+name = "laurelin-setup"
+path = "src/bin/setup.rs"

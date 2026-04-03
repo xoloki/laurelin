@@ -9,6 +9,7 @@ use alloc::vec::Vec;
 #[cfg(test)]
 use std::vec::Vec;
 
+pub mod bjj;
 pub mod bn254;
 pub mod groth16;
 pub mod instruction;
@@ -38,32 +39,6 @@ use solana_program::entrypoint;
 entrypoint!(process_instruction);
 
 pub const VAULT_SEED: &[u8] = b"vault";
-
-// BN254 G1 generator
-pub const G1_X: [u8; 32] = {
-    let mut b = [0u8; 32];
-    b[31] = 1;
-    b
-};
-pub const G1_Y: [u8; 32] = {
-    let mut b = [0u8; 32];
-    b[31] = 2;
-    b
-};
-pub const GENERATOR: G1Point = {
-    let mut g = [0u8; 64];
-    let mut i = 0;
-    while i < 32 {
-        g[i] = G1_X[i];
-        i += 1;
-    }
-    let mut i = 0;
-    while i < 32 {
-        g[32 + i] = G1_Y[i];
-        i += 1;
-    }
-    g
-};
 
 #[cfg(not(test))]
 include!("transfer_vk_generated.rs");
@@ -161,9 +136,6 @@ fn process_create_account(
 }
 
 /// 2+2 ring transfer: 2 senders, 2 receivers.
-///
-/// accounts: [senderPDA0 (write), senderPDA1 (write),
-///            recvPDA0   (write), recvPDA1   (write)]
 fn process_ring_transfer(
     program_id: &Pubkey,
     accounts: &[AccountInfo],
@@ -171,8 +143,6 @@ fn process_ring_transfer(
 ) -> ProgramResult {
     let LaurelinInstruction::RingTransfer {
         proof,
-        commitment,
-        commit_hash,
         sender_new_c1,
         sender_new_c2,
         recv_delta_c1,
@@ -213,11 +183,10 @@ fn process_ring_transfer(
         &sender_new_c2,
         &recv_delta_c1,
         &recv_delta_c2,
-        &commit_hash,
     );
 
-    let ok = verify(&TRANSFER_VK, &proof, &public_inputs, &commitment)
-        .map_err(|_| ProgramError::InvalidArgument)?;
+    let ok =
+        verify(&TRANSFER_VK, &proof, &public_inputs).map_err(|_| ProgramError::InvalidArgument)?;
     if !ok {
         msg!("balance proof invalid");
         return Err(ProgramError::InvalidArgument);
@@ -232,9 +201,9 @@ fn process_ring_transfer(
 
     // Update receiver ciphertexts homomorphically (add delta to each)
     for i in 0..2 {
-        let new_c1 = bn254::g1_add(&recv_state[i].c1, &recv_delta_c1[i])
+        let new_c1 = bjj::bjj_add(&recv_state[i].c1, &recv_delta_c1[i])
             .map_err(|_| ProgramError::InvalidArgument)?;
-        let new_c2 = bn254::g1_add(&recv_state[i].c2, &recv_delta_c2[i])
+        let new_c2 = bjj::bjj_add(&recv_state[i].c2, &recv_delta_c2[i])
             .map_err(|_| ProgramError::InvalidArgument)?;
         let mut data = recv_pda[i].data.borrow_mut();
         data[64..128].copy_from_slice(&new_c1);
@@ -245,16 +214,10 @@ fn process_ring_transfer(
     Ok(())
 }
 
-/// Deposit: proves the delta ciphertext correctly encrypts the deposit amount
-/// under the account's public key, then transfers lamports into the vault.
-/// The vault PDA is created on first deposit if it does not yet exist.
-///
-/// accounts: [payer (write, signer), pda (write), vault_pda (write), system_program]
+/// Deposit: proves the delta ciphertext correctly encrypts the deposit amount.
 fn process_deposit(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     let LaurelinInstruction::Deposit {
         proof,
-        commitment,
-        commit_hash,
         delta_c1,
         delta_c2,
         amount,
@@ -283,11 +246,10 @@ fn process_deposit(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -
     let state =
         AccountState::try_from_bytes(&pda.data.borrow()).ok_or(ProgramError::InvalidAccountData)?;
 
-    let public_inputs =
-        build_deposit_public_inputs(&state.pubkey, &delta_c1, &delta_c2, amount, &commit_hash);
+    let public_inputs = build_deposit_public_inputs(&state.pubkey, &delta_c1, &delta_c2, amount);
 
-    let ok = verify(&DEPOSIT_VK, &proof, &public_inputs, &commitment)
-        .map_err(|_| ProgramError::InvalidArgument)?;
+    let ok =
+        verify(&DEPOSIT_VK, &proof, &public_inputs).map_err(|_| ProgramError::InvalidArgument)?;
     if !ok {
         msg!("deposit proof invalid");
         return Err(ProgramError::InvalidArgument);
@@ -309,8 +271,8 @@ fn process_deposit(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -
         &[payer.clone(), vault_pda.clone(), system_program.clone()],
     )?;
 
-    let new_c1 = bn254::g1_add(&state.c1, &delta_c1).map_err(|_| ProgramError::InvalidArgument)?;
-    let new_c2 = bn254::g1_add(&state.c2, &delta_c2).map_err(|_| ProgramError::InvalidArgument)?;
+    let new_c1 = bjj::bjj_add(&state.c1, &delta_c1).map_err(|_| ProgramError::InvalidArgument)?;
+    let new_c2 = bjj::bjj_add(&state.c2, &delta_c2).map_err(|_| ProgramError::InvalidArgument)?;
 
     let mut data = pda.data.borrow_mut();
     data[64..128].copy_from_slice(&new_c1);
@@ -320,52 +282,10 @@ fn process_deposit(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -
     Ok(())
 }
 
-/// Build the 26 public inputs for the deposit Groth16 proof.
-///
-/// Points in DepositCircuit declaration order (3 G1 points × 8 scalars = 24):
-///   Pk, DeltaC1, DeltaC2
-/// Plus Amount scalar at index 24, commit_hash at index 25.
-/// Total: 26 inputs, IC.len() = 27.
-fn build_deposit_public_inputs(
-    pk: &G1Point,
-    delta_c1: &G1Point,
-    delta_c2: &G1Point,
-    amount: u64,
-    commit_hash: &state::Scalar,
-) -> Vec<state::Scalar> {
-    let mut inputs = Vec::with_capacity(26);
-
-    let points: [&G1Point; 3] = [pk, delta_c1, delta_c2];
-
-    for point in &points {
-        for coord_off in [0usize, 32] {
-            let coord = &point[coord_off..coord_off + 32];
-            for limb_idx in 0..4 {
-                let byte_off = 24 - limb_idx * 8;
-                let mut limb = [0u8; 32];
-                limb[24..32].copy_from_slice(&coord[byte_off..byte_off + 8]);
-                inputs.push(limb);
-            }
-        }
-    }
-
-    let mut amount_scalar = [0u8; 32];
-    amount_scalar[24..32].copy_from_slice(&amount.to_be_bytes());
-    inputs.push(amount_scalar);
-
-    inputs.push(*commit_hash);
-    inputs
-}
-
-/// Withdraw: proves knowledge of sk and that new ciphertext correctly encrypts
-/// old_balance − amount. Lamports are paid from the shared vault.
-///
-/// accounts: [pda (write), vault_pda (write), destination (write)]
+/// Withdraw: proves sk ownership and sufficient balance.
 fn process_withdraw(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -> ProgramResult {
     let LaurelinInstruction::Withdraw {
         proof,
-        commitment,
-        commit_hash,
         new_c1,
         new_c2,
         amount,
@@ -393,17 +313,15 @@ fn process_withdraw(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) 
     let state =
         AccountState::try_from_bytes(&pda.data.borrow()).ok_or(ProgramError::InvalidAccountData)?;
 
-    let public_inputs =
-        build_withdraw_public_inputs(&state, &new_c1, &new_c2, amount, &commit_hash);
+    let public_inputs = build_withdraw_public_inputs(&state, &new_c1, &new_c2, amount);
 
-    let ok = verify(&WITHDRAW_VK, &proof, &public_inputs, &commitment)
-        .map_err(|_| ProgramError::InvalidArgument)?;
+    let ok =
+        verify(&WITHDRAW_VK, &proof, &public_inputs).map_err(|_| ProgramError::InvalidArgument)?;
     if !ok {
         msg!("withdraw proof invalid");
         return Err(ProgramError::InvalidArgument);
     }
 
-    // Keep the vault above its rent-exempt minimum (0-data account).
     let rent = Rent::get()?;
     let rent_exempt = rent.minimum_balance(0);
     let available = vault_pda.lamports().saturating_sub(rent_exempt);
@@ -423,57 +341,78 @@ fn process_withdraw(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) 
     Ok(())
 }
 
-/// Build the 42 public inputs for the withdraw Groth16 proof.
+// ── Public input builders ─────────────────────────────────────────────────────
+//
+// BJJ points are serialised as X||Y (64 bytes, big-endian BN254 Fr coords).
+// Each coordinate is a native BN254 Fr element → passed as a 32-byte Scalar.
+// No limb decomposition needed (BJJ coords are the native field elements).
+
+/// Push a BJJ point's X and Y coordinates as two 32-byte scalars.
+fn push_point(inputs: &mut Vec<state::Scalar>, pt: &G1Point) {
+    let mut x = [0u8; 32];
+    let mut y = [0u8; 32];
+    x.copy_from_slice(&pt[0..32]);
+    y.copy_from_slice(&pt[32..64]);
+    inputs.push(x);
+    inputs.push(y);
+}
+
+/// Build the 7 public inputs for the deposit Groth16 proof.
 ///
-/// Points in WithdrawCircuit declaration order (5 G1 points × 8 scalars = 40):
-///   Pk, OldC1, OldC2, NewC1, NewC2
-/// Plus Amount scalar at index 40, commit_hash at index 41.
-/// Total: 42 inputs, IC.len() = 43.
+/// Circuit public input order (DepositCircuit):
+///   pk (2 Fr), delta_c1 (2 Fr), delta_c2 (2 Fr), amount (1 Fr)
+/// Total: 7, IC.len() = 8.
+fn build_deposit_public_inputs(
+    pk: &G1Point,
+    delta_c1: &G1Point,
+    delta_c2: &G1Point,
+    amount: u64,
+) -> Vec<state::Scalar> {
+    let mut inputs = Vec::with_capacity(7);
+    push_point(&mut inputs, pk);
+    push_point(&mut inputs, delta_c1);
+    push_point(&mut inputs, delta_c2);
+    let mut amount_scalar = [0u8; 32];
+    amount_scalar[24..32].copy_from_slice(&amount.to_be_bytes());
+    inputs.push(amount_scalar);
+    inputs
+}
+
+/// Build the 11 public inputs for the withdraw Groth16 proof.
+///
+/// Circuit public input order (WithdrawCircuit):
+///   pk (2 Fr), old_c1 (2 Fr), old_c2 (2 Fr), new_c1 (2 Fr), new_c2 (2 Fr), amount (1 Fr)
+/// Total: 11, IC.len() = 12.
 fn build_withdraw_public_inputs(
     state: &AccountState,
     new_c1: &G1Point,
     new_c2: &G1Point,
     amount: u64,
-    commit_hash: &state::Scalar,
 ) -> Vec<state::Scalar> {
-    let mut inputs = Vec::with_capacity(42);
-
-    let points: [&G1Point; 5] = [&state.pubkey, &state.c1, &state.c2, new_c1, new_c2];
-
-    for point in &points {
-        for coord_off in [0usize, 32] {
-            let coord = &point[coord_off..coord_off + 32];
-            for limb_idx in 0..4 {
-                let byte_off = 24 - limb_idx * 8;
-                let mut limb = [0u8; 32];
-                limb[24..32].copy_from_slice(&coord[byte_off..byte_off + 8]);
-                inputs.push(limb);
-            }
-        }
-    }
-
-    // Amount as a native field element (big-endian u64 in a 32-byte scalar)
+    let mut inputs = Vec::with_capacity(11);
+    push_point(&mut inputs, &state.pubkey);
+    push_point(&mut inputs, &state.c1);
+    push_point(&mut inputs, &state.c2);
+    push_point(&mut inputs, new_c1);
+    push_point(&mut inputs, new_c2);
     let mut amount_scalar = [0u8; 32];
     amount_scalar[24..32].copy_from_slice(&amount.to_be_bytes());
     inputs.push(amount_scalar);
-
-    inputs.push(*commit_hash);
     inputs
 }
 
-/// Build the 129 public inputs for the ring Groth16 proof.
+/// Build the 32 public inputs for the ring Groth16 proof (N=2).
 ///
-/// Points in circuit struct declaration order (16 G1 points × 8 scalars = 128):
-///   SenderPk0,  SenderPk1
-///   SenderOldC10, SenderOldC11
-///   SenderOldC20, SenderOldC21
-///   SenderNewC10, SenderNewC11
-///   SenderNewC20, SenderNewC21
-///   RecvPk0,    RecvPk1
-///   RecvDeltaC10, RecvDeltaC20
-///   RecvDeltaC11, RecvDeltaC21
-/// Plus commit_hash at index 128 → IC[129].
-/// Total: 129 inputs, IC.len() = 130.
+/// Circuit public input order (RingTransferCircuit<2>):
+///   sender_pks[0..2]      (4 Fr)
+///   sender_old_c1[0..2]   (4 Fr)
+///   sender_old_c2[0..2]   (4 Fr)
+///   sender_new_c1[0..2]   (4 Fr)
+///   sender_new_c2[0..2]   (4 Fr)
+///   recv_pks[0..2]        (4 Fr)
+///   recv_delta_c1[0..2]   (4 Fr)
+///   recv_delta_c2[0..2]   (4 Fr)
+/// Total: 32, IC.len() = 33.
 fn build_ring_public_inputs(
     sender_state: &[AccountState; 2],
     recv_state: &[AccountState; 2],
@@ -481,41 +420,34 @@ fn build_ring_public_inputs(
     sender_new_c2: &[G1Point; 2],
     recv_delta_c1: &[G1Point; 2],
     recv_delta_c2: &[G1Point; 2],
-    commit_hash: &state::Scalar,
 ) -> Vec<state::Scalar> {
-    let mut inputs = Vec::with_capacity(129);
+    let mut inputs = Vec::with_capacity(32);
 
-    let points: [&G1Point; 16] = [
-        &sender_state[0].pubkey,
-        &sender_state[1].pubkey,
-        &sender_state[0].c1,
-        &sender_state[1].c1,
-        &sender_state[0].c2,
-        &sender_state[1].c2,
-        &sender_new_c1[0],
-        &sender_new_c1[1],
-        &sender_new_c2[0],
-        &sender_new_c2[1],
-        &recv_state[0].pubkey,
-        &recv_state[1].pubkey,
-        &recv_delta_c1[0],
-        &recv_delta_c2[0],
-        &recv_delta_c1[1],
-        &recv_delta_c2[1],
-    ];
-
-    for point in &points {
-        for coord_off in [0usize, 32] {
-            let coord = &point[coord_off..coord_off + 32];
-            for limb_idx in 0..4 {
-                let byte_off = 24 - limb_idx * 8;
-                let mut limb = [0u8; 32];
-                limb[24..32].copy_from_slice(&coord[byte_off..byte_off + 8]);
-                inputs.push(limb);
-            }
-        }
+    for s in sender_state {
+        push_point(&mut inputs, &s.pubkey);
     }
-    inputs.push(*commit_hash);
+    for s in sender_state {
+        push_point(&mut inputs, &s.c1);
+    }
+    for s in sender_state {
+        push_point(&mut inputs, &s.c2);
+    }
+    for c in sender_new_c1 {
+        push_point(&mut inputs, c);
+    }
+    for c in sender_new_c2 {
+        push_point(&mut inputs, c);
+    }
+    for r in recv_state {
+        push_point(&mut inputs, &r.pubkey);
+    }
+    for c in recv_delta_c1 {
+        push_point(&mut inputs, c);
+    }
+    for c in recv_delta_c2 {
+        push_point(&mut inputs, c);
+    }
+
     inputs
 }
 
@@ -523,166 +455,76 @@ fn build_ring_public_inputs(
 mod tests {
     use super::*;
 
-    fn make_point(x_lsb: u8) -> state::G1Point {
+    fn make_point(x_lsb: u8, y_lsb: u8) -> state::G1Point {
         let mut p = [0u8; 64];
         p[31] = x_lsb;
+        p[63] = y_lsb;
         p
     }
 
     fn make_state(pk: u8, c1: u8, c2: u8) -> state::AccountState {
         state::AccountState {
-            pubkey: make_point(pk),
-            c1: make_point(c1),
-            c2: make_point(c2),
+            pubkey: make_point(pk, pk),
+            c1: make_point(c1, c1),
+            c2: make_point(c2, c2),
         }
     }
 
     #[test]
     fn deposit_public_inputs_count() {
         let z = [0u8; 64];
-        let inputs = build_deposit_public_inputs(&z, &z, &z, 400, &[0u8; 32]);
-        assert_eq!(inputs.len(), 26);
+        let inputs = build_deposit_public_inputs(&z, &z, &z, 400);
+        assert_eq!(inputs.len(), 7);
     }
 
     #[test]
-    fn deposit_commit_hash_is_last() {
+    fn deposit_amount_is_last() {
         let z = [0u8; 64];
-        let mut commit_hash = [0u8; 32];
-        commit_hash[31] = 0xAB;
-        let inputs = build_deposit_public_inputs(&z, &z, &z, 400, &commit_hash);
-        assert_eq!(inputs[25], commit_hash);
-    }
-
-    #[test]
-    fn deposit_amount_scalar_position() {
-        let z = [0u8; 64];
-        let inputs = build_deposit_public_inputs(&z, &z, &z, 400, &[0u8; 32]);
+        let inputs = build_deposit_public_inputs(&z, &z, &z, 400);
         let mut expected = [0u8; 32];
         expected[24..32].copy_from_slice(&400u64.to_be_bytes());
-        assert_eq!(inputs[24], expected);
+        assert_eq!(inputs[6], expected);
     }
 
     #[test]
     fn withdraw_public_inputs_count() {
         let z = [0u8; 64];
         let state = make_state(0, 0, 0);
-        let inputs = build_withdraw_public_inputs(&state, &z, &z, 400, &[0u8; 32]);
-        assert_eq!(inputs.len(), 42);
+        let inputs = build_withdraw_public_inputs(&state, &z, &z, 400);
+        assert_eq!(inputs.len(), 11);
     }
 
     #[test]
-    fn withdraw_commit_hash_is_last() {
+    fn withdraw_amount_is_last() {
         let z = [0u8; 64];
         let state = make_state(0, 0, 0);
-        let mut commit_hash = [0u8; 32];
-        commit_hash[31] = 0xAB;
-        let inputs = build_withdraw_public_inputs(&state, &z, &z, 400, &commit_hash);
-        assert_eq!(inputs[41], commit_hash);
-    }
-
-    #[test]
-    fn withdraw_amount_scalar_position() {
-        let z = [0u8; 64];
-        let state = make_state(0, 0, 0);
-        let inputs = build_withdraw_public_inputs(&state, &z, &z, 400, &[0u8; 32]);
-        // 400 = 0x190; stored big-endian in [24..32]
+        let inputs = build_withdraw_public_inputs(&state, &z, &z, 400);
         let mut expected = [0u8; 32];
         expected[24..32].copy_from_slice(&400u64.to_be_bytes());
-        assert_eq!(inputs[40], expected);
+        assert_eq!(inputs[10], expected);
     }
 
     #[test]
-    fn public_inputs_count() {
+    fn ring_public_inputs_count() {
         let z = [0u8; 64];
         let sender = [make_state(0, 0, 0), make_state(0, 0, 0)];
         let recv = [make_state(0, 0, 0), make_state(0, 0, 0)];
-        let inputs = build_ring_public_inputs(
-            &sender, &recv, &[z; 2], &[z; 2], &[z; 2], &[z; 2], &[0u8; 32],
-        );
-        assert_eq!(inputs.len(), 129);
+        let inputs = build_ring_public_inputs(&sender, &recv, &[z; 2], &[z; 2], &[z; 2], &[z; 2]);
+        assert_eq!(inputs.len(), 32);
     }
 
     #[test]
-    fn commit_hash_is_last() {
+    fn ring_point_ordering() {
+        // Each point contributes X at [2*i] and Y at [2*i+1].
+        // Point order: sender_pk[0,1], sender_c1[0,1], sender_c2[0,1],
+        //              sender_new_c1[0,1], sender_new_c2[0,1],
+        //              recv_pk[0,1], recv_delta_c1[0,1], recv_delta_c2[0,1]
         let z = [0u8; 64];
-        let sender = [make_state(0, 0, 0), make_state(0, 0, 0)];
-        let recv = [make_state(0, 0, 0), make_state(0, 0, 0)];
-        let mut commit_hash = [0u8; 32];
-        commit_hash[31] = 0xAB;
-        let inputs = build_ring_public_inputs(
-            &sender,
-            &recv,
-            &[z; 2],
-            &[z; 2],
-            &[z; 2],
-            &[z; 2],
-            &commit_hash,
-        );
-        assert_eq!(inputs[128], commit_hash);
-    }
-
-    // A coordinate with only byte[31] set maps to limb 0 (byte_off = 24).
-    #[test]
-    fn limb_decomposition_lsb() {
-        let z = [0u8; 64];
-        let mut pk = [0u8; 64];
-        pk[31] = 0xAB;
-        let sender = [
-            state::AccountState {
-                pubkey: pk,
-                c1: z,
-                c2: z,
-            },
-            make_state(0, 0, 0),
-        ];
-        let recv = [make_state(0, 0, 0), make_state(0, 0, 0)];
-        let inputs = build_ring_public_inputs(
-            &sender, &recv, &[z; 2], &[z; 2], &[z; 2], &[z; 2], &[0u8; 32],
-        );
-        // sender_state[0].pubkey = point index 0 → scalar index 0 = limb 0 of X
-        assert_eq!(inputs[0][31], 0xAB, "LSB should be in limb 0");
-        assert_eq!(inputs[1], [0u8; 32], "limb 1 should be zero");
-        assert_eq!(inputs[2], [0u8; 32], "limb 2 should be zero");
-        assert_eq!(inputs[3], [0u8; 32], "limb 3 should be zero");
-    }
-
-    // A coordinate with only byte[0] set maps to limb 3 (byte_off = 0), at position [24].
-    #[test]
-    fn limb_decomposition_msb() {
-        let z = [0u8; 64];
-        let mut pk = [0u8; 64];
-        pk[0] = 0xCD; // most significant byte
-        let sender = [
-            state::AccountState {
-                pubkey: pk,
-                c1: z,
-                c2: z,
-            },
-            make_state(0, 0, 0),
-        ];
-        let recv = [make_state(0, 0, 0), make_state(0, 0, 0)];
-        let inputs = build_ring_public_inputs(
-            &sender, &recv, &[z; 2], &[z; 2], &[z; 2], &[z; 2], &[0u8; 32],
-        );
-        assert_eq!(inputs[3][24], 0xCD, "MSB should be in limb 3 at byte [24]");
-        assert_eq!(inputs[0], [0u8; 32], "limb 0 should be zero");
-        assert_eq!(inputs[1], [0u8; 32], "limb 1 should be zero");
-        assert_eq!(inputs[2], [0u8; 32], "limb 2 should be zero");
-    }
-
-    // Verify the 16 G1 points appear in declaration order.
-    // Point order: sender_pk[0,1], sender_old_c1[0,1], sender_old_c2[0,1],
-    //              sender_new_c1[0,1], sender_new_c2[0,1], recv_pk[0,1],
-    //              recv_delta_c1[0], recv_delta_c2[0], recv_delta_c1[1], recv_delta_c2[1]
-    #[test]
-    fn point_ordering() {
-        let z = [0u8; 64];
-        // Give each of the 16 points a unique marker in X[31]
         let mut pts = [[0u8; 64]; 16];
         for i in 0..16usize {
-            pts[i][31] = (i + 1) as u8;
+            pts[i][31] = (i + 1) as u8; // X last byte = marker
+            pts[i][63] = (i + 1) as u8; // Y last byte = marker
         }
-
         let sender = [
             state::AccountState {
                 pubkey: pts[0],
@@ -712,17 +554,15 @@ mod tests {
             &recv,
             &[pts[6], pts[7]],
             &[pts[8], pts[9]],
-            &[pts[12], pts[14]],
-            &[pts[13], pts[15]],
-            &[0u8; 32],
+            &[pts[12], pts[13]],
+            &[pts[14], pts[15]],
         );
-        // Each point i contributes 8 scalars; limb 0 of X is at inputs[i*8]
-        for i in 0..16usize {
+        // Each point i: X at inputs[2*i][31], Y at inputs[2*i+1][63]
+        for i in 0..16 {
             assert_eq!(
-                inputs[i * 8][31],
+                inputs[2 * i][31],
                 (i + 1) as u8,
-                "point {} should have marker {} at limb 0 of X",
-                i,
+                "point {i} X should have marker {}",
                 i + 1
             );
         }

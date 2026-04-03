@@ -1,7 +1,7 @@
 //! Solana RPC helpers wrapping solana-client 1.18.
 
 use anyhow::Context;
-use ark_bn254::G1Affine;
+use ark_ed_on_bn254::EdwardsAffine;
 use solana_account_decoder::UiAccountEncoding;
 use solana_client::{
     rpc_client::RpcClient,
@@ -18,7 +18,7 @@ use solana_sdk::{
 };
 use solana_transaction_status::UiTransactionEncoding;
 
-use crate::bn254::{g1_from_bytes, Ciphertext};
+use crate::bjj::{point_from_bytes, Ciphertext};
 
 /// Create a new RPC client.
 pub fn new_client(url: &str) -> RpcClient {
@@ -55,7 +55,7 @@ pub fn send_instructions(
 #[allow(dead_code)]
 pub struct LaurelinkAccount {
     pub pubkey: Pubkey,
-    pub laurelin_pk: G1Affine,
+    pub laurelin_pk: EdwardsAffine,
     pub laurelin_pk_bytes: [u8; 64],
     pub ciphertext: Ciphertext,
 }
@@ -112,9 +112,9 @@ fn parse_account_data(pubkey: Pubkey, data: &[u8]) -> anyhow::Result<LaurelinkAc
     c2_bytes.copy_from_slice(&data[128..192]);
 
     let laurelin_pk =
-        g1_from_bytes(&pk_bytes).with_context(|| format!("parse laurelin_pk for {pubkey}"))?;
-    let c1 = g1_from_bytes(&c1_bytes).with_context(|| format!("parse c1 for {pubkey}"))?;
-    let c2 = g1_from_bytes(&c2_bytes).with_context(|| format!("parse c2 for {pubkey}"))?;
+        point_from_bytes(&pk_bytes).with_context(|| format!("parse laurelin_pk for {pubkey}"))?;
+    let c1 = point_from_bytes(&c1_bytes).with_context(|| format!("parse c1 for {pubkey}"))?;
+    let c2 = point_from_bytes(&c2_bytes).with_context(|| format!("parse c2 for {pubkey}"))?;
 
     Ok(LaurelinkAccount {
         pubkey,
