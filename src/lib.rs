@@ -199,15 +199,25 @@ fn process_ring_transfer(
         data[128..192].copy_from_slice(&sender_new_c2[i]);
     }
 
-    // Update receiver ciphertexts homomorphically (add delta to each)
-    for i in 0..2 {
-        let new_c1 = bjj::bjj_add(&recv_state[i].c1, &recv_delta_c1[i])
-            .map_err(|_| ProgramError::InvalidArgument)?;
-        let new_c2 = bjj::bjj_add(&recv_state[i].c2, &recv_delta_c2[i])
-            .map_err(|_| ProgramError::InvalidArgument)?;
-        let mut data = recv_pda[i].data.borrow_mut();
-        data[64..128].copy_from_slice(&new_c1);
-        data[128..192].copy_from_slice(&new_c2);
+    // Update receiver ciphertexts homomorphically (add delta to each).
+    // Batch all 4 additions (2 receivers × c1,c2) into a single field inversion.
+    let recv_results = bjj::bjj_add_batch4([
+        (&recv_state[0].c1, &recv_delta_c1[0]),
+        (&recv_state[0].c2, &recv_delta_c2[0]),
+        (&recv_state[1].c1, &recv_delta_c1[1]),
+        (&recv_state[1].c2, &recv_delta_c2[1]),
+    ])
+    .map_err(|_| ProgramError::InvalidArgument)?;
+
+    {
+        let mut data = recv_pda[0].data.borrow_mut();
+        data[64..128].copy_from_slice(&recv_results[0]);
+        data[128..192].copy_from_slice(&recv_results[1]);
+    }
+    {
+        let mut data = recv_pda[1].data.borrow_mut();
+        data[64..128].copy_from_slice(&recv_results[2]);
+        data[128..192].copy_from_slice(&recv_results[3]);
     }
 
     msg!("ring transfer complete");
@@ -271,8 +281,8 @@ fn process_deposit(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) -
         &[payer.clone(), vault_pda.clone(), system_program.clone()],
     )?;
 
-    let new_c1 = bjj::bjj_add(&state.c1, &delta_c1).map_err(|_| ProgramError::InvalidArgument)?;
-    let new_c2 = bjj::bjj_add(&state.c2, &delta_c2).map_err(|_| ProgramError::InvalidArgument)?;
+    let (new_c1, new_c2) = bjj::bjj_add_batch(&state.c1, &delta_c1, &state.c2, &delta_c2)
+        .map_err(|_| ProgramError::InvalidArgument)?;
 
     let mut data = pda.data.borrow_mut();
     data[64..128].copy_from_slice(&new_c1);

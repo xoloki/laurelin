@@ -50,7 +50,7 @@ pub fn run(wallet: &Wallet, cfg: &ResolvedConfig, lamports: u64) -> anyhow::Resu
         lamports,
     );
 
-    let sig = send_instructions(&client, &kp, &[set_compute_unit_limit(500_000), ix])?;
+    let sig = send_instructions(&client, &kp, &[set_compute_unit_limit(1_400_000), ix])?;
     println!("Deposit confirmed. Signature: {sig}");
     Ok(())
 }

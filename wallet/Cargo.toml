@@ -7,6 +7,10 @@ edition = "2021"
 name = "laurelin-wallet"
 path = "src/main.rs"
 
+[[bin]]
+name = "integration-test"
+path = "src/bin/integration_test.rs"
+
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }

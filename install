@@ -1,7 +1,5 @@
 #!/bin/bash
 
 cargo build -p laurelin-wallet --release
-pushd gnark-circuit; go build ./cmd/prove; popd
 cp target/release/laurelin-wallet ~/bin/
-cp gnark-circuit/prove ~/bin/laurelin-prover
 cp laurelin-instance ~/bin

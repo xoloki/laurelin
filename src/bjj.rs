@@ -273,6 +273,156 @@ pub fn bjj_add(a: &[u8; 64], b: &[u8; 64]) -> Result<[u8; 64], ()> {
     Ok(out)
 }
 
+/// Internal: Edwards addition returning projective (X, Y, Z) — no inversion.
+fn bjj_add_proj(
+    ax: &[u64; 4],
+    ay: &[u64; 4],
+    bx: &[u64; 4],
+    by: &[u64; 4],
+) -> ([u64; 4], [u64; 4], [u64; 4]) {
+    let one = [1u64, 0, 0, 0];
+    let a_t = field_mul(ax, bx);
+    let b_t = field_mul(ay, by);
+    let ab = field_mul(&a_t, &b_t);
+    let c = field_mul(&D, &ab);
+    let sum1 = field_add(ax, ay);
+    let sum2 = field_add(bx, by);
+    let prod = field_mul(&sum1, &sum2);
+    let e = field_sub(&field_sub(&prod, &a_t), &b_t);
+    let f = field_sub(&one, &c);
+    let g = field_add(&one, &c);
+    let h = field_sub(&b_t, &a_t);
+    (field_mul(&e, &f), field_mul(&g, &h), field_mul(&f, &g))
+}
+
+/// Add two pairs of BJJ points using a single batch inversion.
+///
+/// Computes (a1+b1, a2+b2) with 1 field inversion instead of 2,
+/// saving ~600K CUs on-chain.
+pub fn bjj_add_batch(
+    a1: &[u8; 64],
+    b1: &[u8; 64],
+    a2: &[u8; 64],
+    b2: &[u8; 64],
+) -> Result<([u8; 64], [u8; 64]), ()> {
+    let zero = [0u64; 4];
+    let one = [1u64, 0, 0, 0];
+
+    // Parse all points
+    let a1x = fr_from_be(a1[0..32].try_into().map_err(|_| ())?);
+    let a1y = fr_from_be(a1[32..64].try_into().map_err(|_| ())?);
+    let b1x = fr_from_be(b1[0..32].try_into().map_err(|_| ())?);
+    let b1y = fr_from_be(b1[32..64].try_into().map_err(|_| ())?);
+    let a2x = fr_from_be(a2[0..32].try_into().map_err(|_| ())?);
+    let a2y = fr_from_be(a2[32..64].try_into().map_err(|_| ())?);
+    let b2x = fr_from_be(b2[0..32].try_into().map_err(|_| ())?);
+    let b2y = fr_from_be(b2[32..64].try_into().map_err(|_| ())?);
+
+    // Handle identity cases for pair 1
+    let (x1p, y1p, z1) = if a1x == zero && a1y == one {
+        (b1x, b1y, one)
+    } else if b1x == zero && b1y == one {
+        (a1x, a1y, one)
+    } else {
+        bjj_add_proj(&a1x, &a1y, &b1x, &b1y)
+    };
+
+    // Handle identity cases for pair 2
+    let (x2p, y2p, z2) = if a2x == zero && a2y == one {
+        (b2x, b2y, one)
+    } else if b2x == zero && b2y == one {
+        (a2x, a2y, one)
+    } else {
+        bjj_add_proj(&a2x, &a2y, &b2x, &b2y)
+    };
+
+    if z1 == zero || z2 == zero {
+        return Err(());
+    }
+
+    // Batch inversion: inv(z1*z2) then recover inv(z1) and inv(z2)
+    let z1z2 = field_mul(&z1, &z2);
+    let inv_z1z2 = field_inv(&z1z2);
+    let inv_z1 = field_mul(&inv_z1z2, &z2); // inv(z1) = inv(z1*z2) * z2
+    let inv_z2 = field_mul(&inv_z1z2, &z1); // inv(z2) = inv(z1*z2) * z1
+
+    let rx1 = field_mul(&x1p, &inv_z1);
+    let ry1 = field_mul(&y1p, &inv_z1);
+    let rx2 = field_mul(&x2p, &inv_z2);
+    let ry2 = field_mul(&y2p, &inv_z2);
+
+    let mut out1 = [0u8; 64];
+    out1[0..32].copy_from_slice(&fr_to_be(&rx1));
+    out1[32..64].copy_from_slice(&fr_to_be(&ry1));
+    let mut out2 = [0u8; 64];
+    out2[0..32].copy_from_slice(&fr_to_be(&rx2));
+    out2[32..64].copy_from_slice(&fr_to_be(&ry2));
+    Ok((out1, out2))
+}
+
+/// Add four pairs of BJJ points using a single batch inversion.
+///
+/// Computes (a1+b1, a2+b2, a3+b3, a4+b4) with 1 field inversion.
+/// Used by the ring transfer handler (2 receivers × 2 ciphertext components).
+pub fn bjj_add_batch4(pairs: [(&[u8; 64], &[u8; 64]); 4]) -> Result<[[u8; 64]; 4], ()> {
+    let zero = [0u64; 4];
+    let one = [1u64, 0, 0, 0];
+
+    // Compute all 4 additions in projective
+    let mut proj = [([0u64; 4], [0u64; 4], [1u64, 0, 0, 0]); 4];
+    for (i, (a, b)) in pairs.iter().enumerate() {
+        let ax = fr_from_be(a[0..32].try_into().map_err(|_| ())?);
+        let ay = fr_from_be(a[32..64].try_into().map_err(|_| ())?);
+        let bx = fr_from_be(b[0..32].try_into().map_err(|_| ())?);
+        let by = fr_from_be(b[32..64].try_into().map_err(|_| ())?);
+
+        proj[i] = if ax == zero && ay == one {
+            (bx, by, one)
+        } else if bx == zero && by == one {
+            (ax, ay, one)
+        } else {
+            bjj_add_proj(&ax, &ay, &bx, &by)
+        };
+    }
+
+    // Tree-style batch inversion for 4 Z values using 1 field_inv:
+    //   z01 = z0*z1, z23 = z2*z3, z0123 = z01*z23
+    //   inv0123 = z0123^{p-2}
+    //   inv01 = inv0123*z23, inv23 = inv0123*z01
+    //   inv0 = inv01*z1, inv1 = inv01*z0
+    //   inv2 = inv23*z3, inv3 = inv23*z2
+    let z0 = proj[0].2;
+    let z1 = proj[1].2;
+    let z2 = proj[2].2;
+    let z3 = proj[3].2;
+
+    let z01 = field_mul(&z0, &z1);
+    let z23 = field_mul(&z2, &z3);
+    let z0123 = field_mul(&z01, &z23);
+
+    if z0123 == zero {
+        return Err(());
+    }
+
+    let inv0123 = field_inv(&z0123);
+    let inv01 = field_mul(&inv0123, &z23);
+    let inv23 = field_mul(&inv0123, &z01);
+    let inv0 = field_mul(&inv01, &z1);
+    let inv1 = field_mul(&inv01, &z0);
+    let inv2 = field_mul(&inv23, &z3);
+    let inv3 = field_mul(&inv23, &z2);
+
+    let invs = [inv0, inv1, inv2, inv3];
+    let mut out = [[0u8; 64]; 4];
+    for i in 0..4 {
+        let rx = field_mul(&proj[i].0, &invs[i]);
+        let ry = field_mul(&proj[i].1, &invs[i]);
+        out[i][0..32].copy_from_slice(&fr_to_be(&rx));
+        out[i][32..64].copy_from_slice(&fr_to_be(&ry));
+    }
+    Ok(out)
+}
+
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]

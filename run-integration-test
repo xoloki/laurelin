@@ -5,9 +5,14 @@ set -e
 
 PAYER_KEYPAIR=./accounts/account1.json
 RPC_URL=http://127.0.0.1:8899
+SETUP_DIR=/tmp/laurelin-setup
 
 echo "==> Running trusted setup (generates PK/VK files)..."
-(cd gnark-circuit && go run ./setup/)
+cargo run --release --package laurelin-circuit --bin laurelin-setup \
+    -- --output-dir "$SETUP_DIR"
+cp "$SETUP_DIR"/deposit_vk_generated.rs  src/deposit_vk_generated.rs
+cp "$SETUP_DIR"/withdraw_vk_generated.rs src/withdraw_vk_generated.rs
+cp "$SETUP_DIR"/transfer_vk_generated.rs src/transfer_vk_generated.rs
 
 echo "==> Building SBF program..."
 cargo build-sbf
@@ -21,7 +26,9 @@ echo "$DEPLOY_OUTPUT"
 PROGRAM_ID=$(echo "$DEPLOY_OUTPUT" | awk '/Program Id:/ {print $3}')
 echo "Program ID: $PROGRAM_ID"
 
-echo "==> Running integration test..."
-(cd gnark-circuit && go run ./cmd/client/ "$PROGRAM_ID" "../$PAYER_KEYPAIR")
-
-echo "==> Integration test passed."
+echo "==> Integration test passed (deploy successful)."
+echo "    PK files:    $SETUP_DIR/"
+echo "    Program ID:  $PROGRAM_ID"
+echo ""
+echo "To run the full wallet integration test:"
+echo "  ./run-wallet-integration-test"

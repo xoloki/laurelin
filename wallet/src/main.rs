@@ -1,18 +1,11 @@
-mod bjj;
-mod bn254;
-mod commands;
-mod config;
-mod instructions;
-mod prover;
-mod rpc;
-mod wallet;
-
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
-use crate::{
-    config::{default_config_path, Config, ResolvedConfig},
+use laurelin_wallet::{
+    commands,
+    config::{self, default_config_path, Config, ResolvedConfig},
+    rpc,
     wallet::{default_wallet_path, Wallet},
 };
 
