@@ -12,7 +12,7 @@ import (
 	"github.com/consensys/gnark/frontend/cs/r1cs"
 	"github.com/consensys/gnark/std/algebra/emulated/sw_bn254"
 	"github.com/consensys/gnark/std/math/emulated"
-	"laurelin/circuit"
+	"laurelin/gnark-circuit"
 )
 
 func buildWithdrawWitness(

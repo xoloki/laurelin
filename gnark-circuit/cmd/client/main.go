@@ -44,7 +44,7 @@ import (
 	solanago "github.com/gagliardetto/solana-go"
 	"github.com/gagliardetto/solana-go/rpc"
 
-	xfer "laurelin/circuit"
+	xfer "laurelin/gnark-circuit"
 )
 
 const (

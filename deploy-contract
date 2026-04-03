@@ -9,5 +9,5 @@ OUTPUT=$(solana program deploy \
 echo "$OUTPUT"
 
 PROGRAM_ID=$(echo "$OUTPUT" | awk '/Program Id:/ {print $3}')
-echo "PROGRAM_ID=$PROGRAM_ID" > circuit/local.env
-echo "Wrote circuit/local.env"
+echo "PROGRAM_ID=$PROGRAM_ID" > gnark-circuit/local.env
+echo "Wrote gnark-circuit/local.env"

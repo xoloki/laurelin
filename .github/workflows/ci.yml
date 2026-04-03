@@ -19,10 +19,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
-          cache-dependency-path: circuit/go.sum
+          cache-dependency-path: gnark-circuit/go.sum
 
       - name: Run circuit tests (short)
-        working-directory: circuit
+        working-directory: gnark-circuit
         run: go test -short -timeout 300s ./...
 
       - uses: dtolnay/rust-toolchain@stable
@@ -40,10 +40,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
-          cache-dependency-path: circuit/go.sum
+          cache-dependency-path: gnark-circuit/go.sum
 
       - name: Run trusted setup (generates pk.bin + src/vk_generated.rs)
-        working-directory: circuit
+        working-directory: gnark-circuit
         run: go run ./setup/
 
       # ── Rust / Solana SBF toolchain ─────────────────────────────────────
@@ -89,5 +89,5 @@ jobs:
           echo "PROGRAM_ID=$PROGRAM_ID" >> "$GITHUB_ENV"
 
       - name: Run integration test
-        working-directory: circuit
+        working-directory: gnark-circuit
         run: go run ./cmd/client/ "$PROGRAM_ID" /tmp/payer.json

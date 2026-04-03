@@ -20,7 +20,7 @@ import (
 	"github.com/consensys/gnark/std/algebra/emulated/sw_bn254"
 	"github.com/consensys/gnark/std/math/emulated"
 
-	xfer "laurelin/circuit"
+	xfer "laurelin/gnark-circuit"
 )
 
 func main() {

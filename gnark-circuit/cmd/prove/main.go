@@ -33,7 +33,7 @@ import (
 	"github.com/consensys/gnark/std/algebra/emulated/sw_bn254"
 	"github.com/consensys/gnark/std/math/emulated"
 
-	circuit "laurelin/circuit"
+	circuit "laurelin/gnark-circuit"
 )
 
 // ── JSON wire format ──────────────────────────────────────────────────────────
