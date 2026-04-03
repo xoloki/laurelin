@@ -209,57 +209,49 @@ fn main() -> anyhow::Result<()> {
         )?;
     }
 
-    // ── Ring transfer: wallet 0 → wallet 2, 200_000 lamports ────────────────
-    eprintln!("\n=== Ring transfer (0 → 2, 200000) ===");
-    do_transfer(
-        &client,
-        &program_id,
-        &pk_dir,
-        &wallets,
-        0, // sender
-        2, // receiver
-        200_000,
-        &table,
-    )?;
+    // ── Ring transfers ────────────────────────────────────────────────────────
+    // 4 transfers covering all senderIdx×recvIdx ring slot combinations:
+    //   T1: 0→2  200K  senderSlot=0, recvSlot=0
+    //   T2: 0→3  150K  senderSlot=0, recvSlot=1
+    //   T3: 1→2  100K  senderSlot=1, recvSlot=0
+    //   T4: 1→3   80K  senderSlot=1, recvSlot=1
+    //
+    // After: [650K, 620K, 900K, 630K]
 
-    // Expected: [800_000, 800_000, 800_000, 400_000]
-    let expected_after_t1: [u64; 4] = [800_000, 800_000, 800_000, 400_000];
-    eprintln!("\n=== Balance check (post-transfer-1) ===");
+    eprintln!("\n=== T1: transfer 0→2, 200000 (slot 0,0) ===");
+    do_transfer(&client, &program_id, &pk_dir, &wallets, 0, 2, 200_000, 0, 0, &table)?;
+
+    let expected: [u64; 4] = [800_000, 800_000, 800_000, 400_000];
+    eprintln!("\n=== Balance check (post-T1) ===");
     for (i, w) in wallets.iter().enumerate() {
-        check_balance(
-            &client,
-            w,
-            &program_id,
-            &table,
-            expected_after_t1[i],
-            &format!("wallet {i}"),
-        )?;
+        check_balance(&client, w, &program_id, &table, expected[i], &format!("wallet {i}"))?;
     }
 
-    // ── Ring transfer: wallet 1 → wallet 3, 100_000 lamports ────────────────
-    eprintln!("\n=== Ring transfer (1 → 3, 100000) ===");
-    do_transfer(
-        &client,
-        &program_id,
-        &pk_dir,
-        &wallets,
-        1,
-        3,
-        100_000,
-        &table,
-    )?;
+    eprintln!("\n=== T2: transfer 0→3, 150000 (slot 0,1) ===");
+    do_transfer(&client, &program_id, &pk_dir, &wallets, 0, 3, 150_000, 0, 1, &table)?;
 
-    let expected_after_t2: [u64; 4] = [800_000, 700_000, 800_000, 500_000];
-    eprintln!("\n=== Balance check (post-transfer-2) ===");
+    let expected: [u64; 4] = [650_000, 800_000, 800_000, 550_000];
+    eprintln!("\n=== Balance check (post-T2) ===");
     for (i, w) in wallets.iter().enumerate() {
-        check_balance(
-            &client,
-            w,
-            &program_id,
-            &table,
-            expected_after_t2[i],
-            &format!("wallet {i}"),
-        )?;
+        check_balance(&client, w, &program_id, &table, expected[i], &format!("wallet {i}"))?;
+    }
+
+    eprintln!("\n=== T3: transfer 1→2, 100000 (slot 1,0) ===");
+    do_transfer(&client, &program_id, &pk_dir, &wallets, 1, 2, 100_000, 1, 0, &table)?;
+
+    let expected: [u64; 4] = [650_000, 700_000, 900_000, 550_000];
+    eprintln!("\n=== Balance check (post-T3) ===");
+    for (i, w) in wallets.iter().enumerate() {
+        check_balance(&client, w, &program_id, &table, expected[i], &format!("wallet {i}"))?;
+    }
+
+    eprintln!("\n=== T4: transfer 1→3, 80000 (slot 1,1) ===");
+    do_transfer(&client, &program_id, &pk_dir, &wallets, 1, 3, 80_000, 1, 1, &table)?;
+
+    let expected: [u64; 4] = [650_000, 620_000, 900_000, 630_000];
+    eprintln!("\n=== Balance check (post-T4) ===");
+    for (i, w) in wallets.iter().enumerate() {
+        check_balance(&client, w, &program_id, &table, expected[i], &format!("wallet {i}"))?;
     }
 
     // ── Withdrawals ─────────────────────────────────────────────────────────
@@ -267,7 +259,7 @@ fn main() -> anyhow::Result<()> {
     let withdraw_pk_path = pk_dir.join("withdraw_pk.bin");
 
     for (i, w) in wallets.iter().enumerate() {
-        let amount = expected_after_t2[i];
+        let amount = expected[i];
         let kp = w.solana_keypair()?;
         let pda = w.pda(&program_id);
         let sk = w.laurelin_sk_fr();
@@ -339,10 +331,10 @@ fn do_transfer(
     sender_idx: usize,
     recv_idx: usize,
     amount: u64,
+    ring_sender_slot: usize,
+    ring_recv_slot: usize,
     table: &BsgsTable,
 ) -> anyhow::Result<()> {
-    use ark_ed_on_bn254::EdwardsAffine;
-
     let sender = &wallets[sender_idx];
     let receiver = &wallets[recv_idx];
     let sk = sender.laurelin_sk_fr();
@@ -389,12 +381,18 @@ fn do_transfer(
     let r_t = BJJFr::rand(&mut rng);
     let r_recv = BJJFr::rand(&mut rng);
 
-    // Ring slot assignments: sender at slot 0, decoy at slot 1
-    let ring_sender_idx: usize = 0;
-    let ring_recv_idx: usize = 0;
+    // Ring slot assignments: real sender/receiver at the given slot
+    let ring_sender_idx = ring_sender_slot;
+    let ring_recv_idx = ring_recv_slot;
 
-    let sender_accs: [&LaurelinkAccount; 2] = [&sender_acc, decoy_sender];
-    let recv_accs: [&LaurelinkAccount; 2] = [&recv_acc, decoy_recv];
+    let mut sender_accs: [&LaurelinkAccount; 2] = [&sender_acc, decoy_sender];
+    if ring_sender_idx == 1 {
+        sender_accs = [decoy_sender, &sender_acc];
+    }
+    let mut recv_accs: [&LaurelinkAccount; 2] = [&recv_acc, decoy_recv];
+    if ring_recv_idx == 1 {
+        recv_accs = [decoy_recv, &recv_acc];
+    }
 
     // Real sender: fresh ciphertext
     let sender_new_c1_real = scalar_mul(&g, &r_new);
@@ -421,10 +419,20 @@ fn do_transfer(
     let recv_delta_c1_decoy = scalar_mul(&g, &r_recv);
     let recv_delta_c2_decoy = scalar_mul(&decoy_recv.laurelin_pk, &r_recv);
 
-    let sender_new_c1 = [sender_new_c1_real, sender_new_c1_decoy];
-    let sender_new_c2 = [sender_new_c2_real, sender_new_c2_decoy];
-    let recv_delta_c1 = [recv_delta_c1_real, recv_delta_c1_decoy];
-    let recv_delta_c2 = [recv_delta_c2_real, recv_delta_c2_decoy];
+    use ark_ed_on_bn254::EdwardsAffine;
+    let mut sender_new_c1 = [EdwardsAffine::zero(); 2];
+    let mut sender_new_c2 = [EdwardsAffine::zero(); 2];
+    let mut recv_delta_c1 = [EdwardsAffine::zero(); 2];
+    let mut recv_delta_c2 = [EdwardsAffine::zero(); 2];
+
+    sender_new_c1[ring_sender_idx] = sender_new_c1_real;
+    sender_new_c1[1 - ring_sender_idx] = sender_new_c1_decoy;
+    sender_new_c2[ring_sender_idx] = sender_new_c2_real;
+    sender_new_c2[1 - ring_sender_idx] = sender_new_c2_decoy;
+    recv_delta_c1[ring_recv_idx] = recv_delta_c1_real;
+    recv_delta_c1[1 - ring_recv_idx] = recv_delta_c1_decoy;
+    recv_delta_c2[ring_recv_idx] = recv_delta_c2_real;
+    recv_delta_c2[1 - ring_recv_idx] = recv_delta_c2_decoy;
 
     let transfer_pk_path = pk_dir.join("transfer_pk.bin");
 

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Runs the full integration test cycle against a local validator.
-# Prerequisites: docker-compose -f start-testnet.yml up
+# Prerequisites: solana-test-validator running
 set -e
 
 PAYER_KEYPAIR=./accounts/account1.json
@@ -20,15 +20,17 @@ cargo build-sbf
 echo "==> Configuring Solana CLI..."
 solana config set --url "$RPC_URL" --keypair "$PAYER_KEYPAIR"
 
+echo "==> Airdropping SOL to payer..."
+solana airdrop 100
+
 echo "==> Deploying program..."
 DEPLOY_OUTPUT=$(solana program deploy target/deploy/laurelin.so)
 echo "$DEPLOY_OUTPUT"
 PROGRAM_ID=$(echo "$DEPLOY_OUTPUT" | awk '/Program Id:/ {print $3}')
 echo "Program ID: $PROGRAM_ID"
 
-echo "==> Integration test passed (deploy successful)."
-echo "    PK files:    $SETUP_DIR/"
-echo "    Program ID:  $PROGRAM_ID"
-echo ""
-echo "To run the full wallet integration test:"
-echo "  ./run-wallet-integration-test"
+echo "==> Running integration test..."
+cargo run --release --package laurelin-wallet --bin integration-test \
+    -- "$PROGRAM_ID" "$PAYER_KEYPAIR" "$SETUP_DIR"
+
+echo "==> Integration test passed."
