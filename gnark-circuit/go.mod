@@ -1,4 +1,4 @@
-module laurelin/circuit
+module laurelin/gnark-circuit
 
 go 1.21
 
