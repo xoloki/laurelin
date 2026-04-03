@@ -129,7 +129,7 @@ func (c *RingTransferCircuit) Define(api frontend.API) error {
 	bmvScalar := scalarField.FromBits(bmvBits...)
 
 	// ── 5. Select real / decoy sender points ───────────────────────────────
-	// Select(cond, b, a): returns a when cond==0, b when cond==1.
+	// selectG1(cond, a, b): returns a when cond==0, b when cond==1.
 	realSenderPk := selectG1(api, fpField, c.SenderIdx, c.SenderPk0, c.SenderPk1)
 	decoySenderPk := selectG1(api, fpField, c.SenderIdx, c.SenderPk1, c.SenderPk0)
 	realSenderOldC1 := selectG1(api, fpField, c.SenderIdx, c.SenderOldC10, c.SenderOldC11)

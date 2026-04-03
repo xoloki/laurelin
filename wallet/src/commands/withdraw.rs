@@ -5,7 +5,7 @@ use ark_std::UniformRand;
 use solana_sdk::{pubkey::Pubkey, signature::Signer};
 
 use crate::{
-    bn254::{bsgs_decrypt, g1_to_bytes, generator, point_add, scalar_mul, BsgsTable},
+    bn254::{bsgs_decrypt, g1_to_bytes, generator, point_add, scalar_mul, BsgsTable, MAX_CONFIDENTIAL_LAMPORTS},
     config::ResolvedConfig,
     instructions::{set_compute_unit_limit, vault_pda, withdraw},
     prover::prove_withdraw,
@@ -14,6 +14,12 @@ use crate::{
 };
 
 pub fn run(wallet: &Wallet, cfg: &ResolvedConfig, lamports: u64) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        lamports <= MAX_CONFIDENTIAL_LAMPORTS,
+        "amount {} lamports exceeds the maximum confidential balance ({} lamports, ~4.3 SOL)",
+        lamports,
+        MAX_CONFIDENTIAL_LAMPORTS,
+    );
     let client = new_client(&cfg.rpc_url);
     let kp = wallet.solana_keypair()?;
     let program_id: Pubkey = cfg.program_id.parse()?;

@@ -3,7 +3,7 @@
 use solana_sdk::{pubkey::Pubkey, signature::Signer};
 
 use crate::{
-    bn254::{elgamal_encrypt, g1_to_bytes},
+    bn254::{elgamal_encrypt, g1_to_bytes, MAX_CONFIDENTIAL_LAMPORTS},
     config::ResolvedConfig,
     instructions::{deposit, set_compute_unit_limit, vault_pda},
     prover::prove_deposit,
@@ -12,6 +12,12 @@ use crate::{
 };
 
 pub fn run(wallet: &Wallet, cfg: &ResolvedConfig, lamports: u64) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        lamports <= MAX_CONFIDENTIAL_LAMPORTS,
+        "amount {} lamports exceeds the maximum confidential balance ({} lamports, ~4.3 SOL)",
+        lamports,
+        MAX_CONFIDENTIAL_LAMPORTS,
+    );
     let client = new_client(&cfg.rpc_url);
     let kp = wallet.solana_keypair()?;
     let program_id: Pubkey = cfg.program_id.parse()?;

@@ -14,6 +14,7 @@
 //! All in-memory key material lives in `Zeroizing` wrappers and is
 //! overwritten with zeros on drop.
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use aes_gcm::{
@@ -24,6 +25,7 @@ use anyhow::Context;
 use argon2::{Algorithm, Argon2, Params, Version};
 use ark_bn254::{Fr, G1Affine};
 use rand::RngCore;
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{
     pubkey::Pubkey,
@@ -109,14 +111,12 @@ fn aes_encrypt(
     password: &[u8],
     solana_pubkey: &Pubkey,
 ) -> anyhow::Result<WalletV2> {
-    let mut rng = rand::thread_rng();
-
     let mut salt = [0u8; ARGON2_SALT_LEN];
     let mut solana_nonce_bytes = [0u8; AES_NONCE_LEN];
     let mut laurelin_nonce_bytes = [0u8; AES_NONCE_LEN];
-    rng.fill_bytes(&mut salt);
-    rng.fill_bytes(&mut solana_nonce_bytes);
-    rng.fill_bytes(&mut laurelin_nonce_bytes);
+    OsRng.fill_bytes(&mut salt);
+    OsRng.fill_bytes(&mut solana_nonce_bytes);
+    OsRng.fill_bytes(&mut laurelin_nonce_bytes);
 
     let key = argon2_derive(password, &salt)?;
     let cipher = Aes256Gcm::new_from_slice(&key[..])
@@ -335,7 +335,9 @@ fn write_wallet(path: &Path, json: &str) -> anyhow::Result<()> {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("create dir {}", parent.display()))?;
     }
-    std::fs::write(path, json).with_context(|| format!("write wallet {}", path.display()))
+    std::fs::write(path, json).with_context(|| format!("write wallet {}", path.display()))?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("set permissions on {}", path.display()))
 }
 
 /// Return the default wallet file path: ~/.laurelin/wallet.json.

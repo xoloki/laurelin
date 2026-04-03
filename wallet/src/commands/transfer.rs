@@ -9,7 +9,7 @@ use ark_std::UniformRand;
 use solana_sdk::pubkey::Pubkey;
 
 use crate::{
-    bn254::{bsgs_decrypt, g1_to_bytes, generator, point_add, scalar_mul, BsgsTable},
+    bn254::{bsgs_decrypt, g1_to_bytes, generator, point_add, scalar_mul, BsgsTable, MAX_CONFIDENTIAL_LAMPORTS},
     config::ResolvedConfig,
     instructions::{ring_transfer, set_compute_unit_limit},
     prover::prove_transfer,
@@ -30,6 +30,13 @@ pub fn run(
     let program_id: Pubkey = cfg.program_id.parse()?;
     let my_pda = wallet.pda(&program_id);
     let sk = wallet.laurelin_sk_fr();
+
+    anyhow::ensure!(
+        lamports <= MAX_CONFIDENTIAL_LAMPORTS,
+        "amount {} lamports exceeds the maximum confidential balance ({} lamports, ~4.3 SOL)",
+        lamports,
+        MAX_CONFIDENTIAL_LAMPORTS,
+    );
 
     // Parse receiver Laurelin pubkey (base58-encoded 32-byte X coordinate)
     let recv_pk_x: [u8; 32] = bs58::decode(to)
