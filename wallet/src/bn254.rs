@@ -12,6 +12,11 @@ use ark_ec::{AffineRepr, CurveGroup};
 use ark_ff::{BigInteger, PrimeField};
 use ark_std::UniformRand;
 
+/// Maximum confidential balance / amount: 2^32 − 1 lamports (~4.3 SOL).
+/// The ZK circuits range-check all values to 32 bits; exceeding this will
+/// cause the prover to fail.  Commands validate against this before proving.
+pub const MAX_CONFIDENTIAL_LAMPORTS: u64 = u32::MAX as u64;
+
 // ── Serialisation ─────────────────────────────────────────────────────────────
 
 /// Serialise a Fq element as a 32-byte big-endian array.

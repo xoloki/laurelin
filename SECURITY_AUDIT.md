@@ -30,6 +30,8 @@ ZK circuits range-check amounts with `ToBinary(x, 32)`, capping the maximum conf
 
 **Affected files:** `circuit/transfer.go`, `circuit/deposit.go`, `circuit/withdraw.go`
 
+**Response (2026-04-03):** Accepted as a known limitation for initial launch. 4.3 SOL (~$400) is appropriate for the current use case. Extending the range requires: (1) updating `ToBinary` bit width in all three circuits, (2) caching the BSGS table to disk to keep decryption fast, (3) re-running trusted setup and redeploying the program. Both Pollard's kangaroo and BSGS have the same O(√N) step count — caching is the key optimization. Will revisit if users hit the limit.
+
 ### L1. Wallet file permissions not enforced
 
 `~/.laurelin/wallet.json` is written without explicitly setting `0600` permissions. On systems with a permissive umask, the file may be group- or world-readable.
@@ -40,9 +42,13 @@ use std::os::unix::fs::PermissionsExt;
 std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
 ```
 
+**Response (2026-04-03):** Fixed in `write_wallet()` in `wallet/src/wallet.rs`. **Resolved.**
+
 ### L2. Use `OsRng` for cryptographic key material in wallet
 
 `rand::thread_rng()` is used to generate Argon2 salts and AES-GCM nonces in `wallet/src/wallet.rs`. While `thread_rng()` is seeded from OS entropy and is cryptographically acceptable, explicitly using `rand::rngs::OsRng` makes the intent clear and removes any ambiguity.
+
+**Response (2026-04-03):** Switched to `rand::rngs::OsRng` in `aes_encrypt()`. **Resolved.**
 
 ---
 
@@ -60,6 +66,6 @@ These were flagged during review but appear safe by design:
 
 1. ~~Verify `transfer` circuit enforces prover knowledge of sender `sk`~~ — **C1 resolved**
 2. ~~Verify / fix withdraw destination validation on-chain~~ — **C2 resolved (false positive)**
-3. Extend balance range checks from 32-bit to 40+ bits — **H1**
-4. Enforce `0600` permissions on wallet file — **L1**
-5. Switch salt/nonce generation to `OsRng` — **L2**
+3. ~~Extend balance range checks from 32-bit to 40+ bits~~ — **H1 deferred (accepted limitation)**
+4. ~~Enforce `0600` permissions on wallet file~~ — **L1 resolved**
+5. ~~Switch salt/nonce generation to `OsRng`~~ — **L2 resolved**
