@@ -7,7 +7,7 @@ PAYER_KEYPAIR=./accounts/account1.json
 RPC_URL=http://127.0.0.1:8899
 
 echo "==> Running trusted setup (generates PK/VK files)..."
-(cd circuit && go run ./setup/)
+(cd gnark-circuit && go run ./setup/)
 
 echo "==> Building SBF program..."
 cargo build-sbf
@@ -22,6 +22,6 @@ PROGRAM_ID=$(echo "$DEPLOY_OUTPUT" | awk '/Program Id:/ {print $3}')
 echo "Program ID: $PROGRAM_ID"
 
 echo "==> Running integration test..."
-(cd circuit && go run ./cmd/client/ "$PROGRAM_ID" "../$PAYER_KEYPAIR")
+(cd gnark-circuit && go run ./cmd/client/ "$PROGRAM_ID" "../$PAYER_KEYPAIR")
 
 echo "==> Integration test passed."
