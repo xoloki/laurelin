@@ -30,7 +30,7 @@ ZK circuits range-check amounts with `ToBinary(x, 32)`, capping the maximum conf
 
 **Affected files:** `circuit/transfer.go`, `circuit/deposit.go`, `circuit/withdraw.go`
 
-**Response (2026-04-03):** Accepted as a known limitation for initial launch. 4.3 SOL (~$400) is appropriate for the current use case. Extending the range requires: (1) updating `ToBinary` bit width in all three circuits, (2) caching the BSGS table to disk to keep decryption fast, (3) re-running trusted setup and redeploying the program. Both Pollard's kangaroo and BSGS have the same O(√N) step count — caching is the key optimization. Will revisit if users hit the limit.
+**Response (2026-04-03):** Accepted as a known limitation for initial launch. 4.3 SOL (~$400) is appropriate for the current use case. The wallet now validates all amounts against `MAX_CONFIDENTIAL_LAMPORTS` (2³² − 1) before attempting to prove, returning a clear error message rather than failing inside the prover. If this check were somehow bypassed, the ZK circuit itself enforces the 32-bit range constraint — a proof for an out-of-range value cannot be generated, making silent balance corruption impossible. Extending the range requires: (1) updating `ToBinary` bit width in all three circuits, (2) caching the BSGS table to disk to keep decryption fast, (3) re-running trusted setup and redeploying the program. Will revisit if users hit the limit.
 
 ### L1. Wallet file permissions not enforced
 
