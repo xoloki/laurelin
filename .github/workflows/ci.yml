@@ -19,7 +19,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
-          cache-dependency-path: circuit/go.sum
+          cache-dependency-path: gnark-circuit/go.sum
 
       - name: Run circuit tests (short)
         working-directory: circuit
@@ -40,7 +40,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.22"
-          cache-dependency-path: circuit/go.sum
+          cache-dependency-path: gnark-circuit/go.sum
 
       - name: Run trusted setup (generates pk.bin + src/vk_generated.rs)
         working-directory: circuit

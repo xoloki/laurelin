@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "wallet"]
+members = [".", "wallet", "circuit"]
 resolver = "2"
 
 [package]
