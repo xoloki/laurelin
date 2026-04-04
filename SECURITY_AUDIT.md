@@ -1,71 +1,107 @@
 # Security Audit — Laurelin
 
-Conducted 2026-03-29, pre-mainnet hardening pass.
+Conducted 2026-04-04, post-BJJ migration.
+
+Covers the full Rust codebase: `contract/` (on-chain program), `circuit/` (ark-groth16 R1CS circuits), `wallet/` (CLI + in-process prover).
 
 ---
 
-## Must Verify (Open Questions)
+## CRITICAL
 
-### C1. Ring transfer sender authorization in-circuit
+### C-1. CreateAccount accepted arbitrary initial ciphertext (vault theft)
 
-Does the `transfer` circuit include a constraint proving the prover knows `sk` for one of the sender ring members? If not, anyone could construct a valid-looking proof without owning an account.
+The `CreateAccount` instruction previously accepted caller-supplied `c1` and `c2` values without proof they encrypt zero. An attacker could create an account with a ciphertext encrypting an arbitrary balance, then immediately withdraw real SOL from the vault.
 
-The ZK proof is intended to be the authorization mechanism — a valid proof implies knowledge of the secret key. But this needs explicit verification in the circuit code before it can be relied upon.
+**Status: FIXED (2026-04-04).** `CreateAccount` now only accepts a BJJ public key. The contract hardcodes the identity ciphertext `(0, 1)` for both c1 and c2. Instruction payload shrunk from 193 to 65 bytes.
 
-**Response (2026-03-30):** Verified. `selectG1(api, fpField, cond, a, b)` correctly returns `a` when `cond==0` and `b` when `cond==1`. The suspicious comment was documenting gnark's counterintuitive true-value-first `Select` API, not a bug — it has been updated to describe `selectG1`'s own semantics. Step 6 (`SenderPk[senderIdx] = Sk * G`) correctly enforces that the prover knows `sk` for the selected ring member. **No issue.**
+### C-2. Withdraw destination not bound to proof (front-running)
 
-### C2. Withdraw destination not bound to signer
+The withdraw instruction takes `[pda, vault_pda, destination]` as accounts, but no account requires a signer flag, and the `destination` address is not included in the Groth16 public inputs. An attacker monitoring the mempool can copy the proof from a pending withdraw transaction and submit a new transaction with the same proof but their own destination address.
 
-The on-chain withdraw handler may allow an arbitrary destination account to be passed. If the program does not verify that destination == signer's Solana pubkey, a malicious RPC or MITM could substitute a different destination address.
-
-**Response (2026-03-30):** False positive. Solana transactions are signed with the payer's Ed25519 key over the entire instruction including all account addresses — a MITM cannot alter the destination without invalidating the signature. The legitimate concern (a compromised wallet client constructing the instruction with a wrong destination before signing) is out of scope for on-chain validation. **No issue.**
+**Status: OPEN.** Fix options: (a) require `destination` to be a signer, or (b) add a hash of the destination pubkey to the circuit's public inputs.
 
 ---
 
-## Real Issues to Fix
+## HIGH
 
-### H1. 32-bit balance cap (~4.3 SOL maximum per account)
+### H-1. No signer verification on ring transfer accounts
 
-ZK circuits range-check amounts with `ToBinary(x, 32)`, capping the maximum confidential balance at 2^32 lamports ≈ **4.3 SOL**. Depositing more than this will corrupt the balance. Must be extended to at least 40–50 bits before mainnet.
+The ring transfer instruction does not require any account to be a signer. While the Groth16 proof cryptographically proves knowledge of the sender's secret key, the lack of a Solana-level signer means any party who obtains a valid proof can submit it. This violates defense-in-depth.
 
-**Affected files:** `circuit/transfer.go`, `circuit/deposit.go`, `circuit/withdraw.go`
+**Status: OPEN.**
 
-**Response (2026-04-03):** Accepted as a known limitation for initial launch. 4.3 SOL (~$400) is appropriate for the current use case. The wallet now validates all amounts against `MAX_CONFIDENTIAL_LAMPORTS` (2³² − 1) before attempting to prove, returning a clear error message rather than failing inside the prover. If this check were somehow bypassed, the ZK circuit itself enforces the 32-bit range constraint — a proof for an out-of-range value cannot be generated, making silent balance corruption impossible. Extending the range requires: (1) updating `ToBinary` bit width in all three circuits, (2) caching the BSGS table to disk to keep decryption fast, (3) re-running trusted setup and redeploying the program. Will revisit if users hit the limit.
+### H-2. No duplicate account check in ring transfer
 
-### L1. Wallet file permissions not enforced
+The ring transfer accepts 4 account keys `[sender0, sender1, recv0, recv1]` without verifying they are all distinct. If a PDA appears in multiple positions, the sequential writes cause state corruption — the later write overwrites the earlier one.
 
-`~/.laurelin/wallet.json` is written without explicitly setting `0600` permissions. On systems with a permissive umask, the file may be group- or world-readable.
+**Status: OPEN.** Fix: add pairwise inequality checks on the 4 account keys in `process_ring_transfer`.
 
-**Fix:** After writing in `wallet/src/wallet.rs`:
-```rust
-use std::os::unix::fs::PermissionsExt;
-std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-```
+### H-3. No subgroup membership check on BJJ points
 
-**Response (2026-04-03):** Fixed in `write_wallet()` in `wallet/src/wallet.rs`. **Resolved.**
+Baby JubJub has cofactor 8. Neither the on-chain program nor the wallet verifies that public keys or ciphertext points are in the prime-order subgroup. Small-order points could leak information about the real sender/receiver index through re-randomization behavior.
 
-### L2. Use `OsRng` for cryptographic key material in wallet
-
-`rand::thread_rng()` is used to generate Argon2 salts and AES-GCM nonces in `wallet/src/wallet.rs`. While `thread_rng()` is seeded from OS entropy and is cryptographically acceptable, explicitly using `rand::rngs::OsRng` makes the intent clear and removes any ambiguity.
-
-**Response (2026-04-03):** Switched to `rand::rngs::OsRng` in `aes_encrypt()`. **Resolved.**
+**Status: OPEN.** Fix: validate subgroup membership when registering a public key in `CreateAccount`. Wallet should also validate points received from the chain.
 
 ---
 
-## Likely False Positives
+## MEDIUM
 
-These were flagged during review but appear safe by design:
+### M-1. Non-canonical field elements not rejected on-chain
 
-- **Proof replay:** Each operation updates the on-chain ciphertext state. A replayed proof will fail verification because the old ciphertext public inputs no longer match the account's current state.
-- **Deposit authorization:** Any address can deposit into a PDA without the owner's signature. This is intentional — same semantics as receiving SOL.
-- **Vault PDA ownership:** The vault is a program-derived address. It cannot be pre-empted by an attacker.
+`contract/src/bjj.rs` `fr_from_be` converts 32 big-endian bytes to limbs without checking the value is less than the BN254 Fr modulus. Values >= p fed into Montgomery arithmetic produce incorrect results, corrupting on-chain ciphertext state.
+
+**Status: OPEN.** Fix: add a `>= p` check in `fr_from_be` or at the instruction parsing layer.
+
+### M-2. V1 plaintext wallet key material not zeroized during load
+
+When loading a V1 (plaintext) wallet, hex-decoded secret key bytes in `Vec<u8>` are not explicitly zeroized before being dropped. The key material persists on the heap until overwritten.
+
+**Status: OPEN.**
+
+### M-3. Vault creation asymmetry
+
+Deposits transfer SOL to the vault via `system_instruction::transfer` (requires system-owned account), but withdrawals use raw lamport manipulation (`**vault_pda.lamports.borrow_mut() -= amount`). This asymmetry works because the vault is program-owned after creation, but is fragile.
+
+**Status: OPEN.**
 
 ---
 
-## Remediation Order
+## LOW
 
-1. ~~Verify `transfer` circuit enforces prover knowledge of sender `sk`~~ — **C1 resolved**
-2. ~~Verify / fix withdraw destination validation on-chain~~ — **C2 resolved (false positive)**
-3. ~~Extend balance range checks from 32-bit to 40+ bits~~ — **H1 deferred (accepted limitation)**
-4. ~~Enforce `0600` permissions on wallet file~~ — **L1 resolved**
-5. ~~Switch salt/nonce generation to `OsRng`~~ — **L2 resolved**
+### L-1. BSGS table X-coordinate key collision
+
+The BSGS baby-step table uses the 32-byte X coordinate as the HashMap key. Two points sharing the same X (one being the Y-negation of the other) would collide. Extremely low probability for the 2^16 table.
+
+**Status: Accepted (negligible risk).**
+
+### L-2. Timing side-channel in on-chain field arithmetic
+
+`ge_p` uses early-return comparison, creating data-dependent timing. Minimal practical impact — on-chain execution timing is noisy, and the values compared are intermediate results, not secret keys.
+
+**Status: Accepted.**
+
+### L-3. Proving key files loaded without integrity verification
+
+PK files are deserialized without hash verification. A local attacker who modifies PK files could generate proofs for a backdoored circuit. However, the on-chain VK would need to match, limiting exploitability.
+
+**Status: Accepted (requires local compromise).**
+
+---
+
+## INFORMATIONAL
+
+- **Trusted setup**: Uses single-party `rand::thread_rng()` randomness. Toxic waste not explicitly destroyed. No MPC ceremony. Standard limitation for development; must be addressed before production.
+- **BJJ secret key not zeroized after conversion to BJJFr**: `wallet.laurelin_sk_fr()` returns a `BJJFr` that doesn't implement `Zeroize`. The scalar persists on the stack.
+- **On-chain amount not capped to circuit range**: The contract accepts `amount` as `u64` but the circuit range-checks to `[0, 2^32)`. Out-of-range amounts fail at proof generation, not on-chain. Wastes gas for impossible transactions.
+- **Config file permissions**: `~/.laurelin/config.json` written without restrictive permissions. Contains `program_id` and `rpc_url` (not secrets, but a local attacker could redirect to a malicious RPC).
+- **Integration test coverage**: All 4 `senderIdx x recvIdx` combinations tested. Full deposit/transfer/withdraw cycle with BSGS balance verification at each step.
+
+---
+
+## Remediation Priority
+
+1. **C-2**: Withdraw front-running — require destination signer or bind to proof
+2. **H-2**: Duplicate account check in ring transfer
+3. **H-3**: Subgroup membership validation on BJJ points
+4. **M-1**: Canonical field element validation
+5. **H-1**: Signer requirement on transfers (defense-in-depth)
