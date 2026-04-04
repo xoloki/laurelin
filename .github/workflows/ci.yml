@@ -61,7 +61,9 @@ jobs:
         id: cache-solana
         uses: actions/cache@v4
         with:
-          path: ~/.local/share/solana
+          path: |
+            ~/.local/share/solana
+            ~/.cache/solana
           key: solana-v3.1.11
 
       - name: Install Solana CLI v3.1.11
