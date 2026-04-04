@@ -35,7 +35,7 @@ mod tests {
         use ark_bn254::Fr as BN254Fr;
         use ark_ec::twisted_edwards::TECurveConfig;
         use ark_ed_on_bn254::{EdwardsAffine, EdwardsConfig, Fr as BJJFr};
-        use ark_ff::{BigInteger, Field, PrimeField};
+        use ark_ff::PrimeField;
 
         let g: EdwardsAffine = EdwardsConfig::GENERATOR;
         eprintln!("GEN_X (LE u64): {:?}", g.x.into_bigint().0);
