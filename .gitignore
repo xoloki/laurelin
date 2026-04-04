@@ -3,3 +3,4 @@ contract/src/*vk_generated.rs
 accounts/
 ledger/
 *~
+*.log

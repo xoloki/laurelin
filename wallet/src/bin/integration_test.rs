@@ -15,7 +15,6 @@ use ark_ed_on_bn254::Fr as BJJFr;
 use ark_std::UniformRand;
 use solana_client::rpc_client::RpcClient;
 use solana_sdk::{
-    commitment_config::CommitmentConfig,
     native_token::LAMPORTS_PER_SOL,
     pubkey::Pubkey,
     signature::{Keypair, Signer},
@@ -28,7 +27,6 @@ use laurelin_wallet::{
         bsgs_decrypt, coord_to_bytes, elgamal_encrypt, generator, point_add, point_to_bytes,
         scalar_mul, BsgsTable,
     },
-    config::ResolvedConfig,
     instructions::{
         create_account, deposit, ring_transfer, set_compute_unit_limit, vault_pda, withdraw,
     },
@@ -105,12 +103,8 @@ fn main() -> anyhow::Result<()> {
         std::process::exit(1);
     }
     let program_id: Pubkey = args[1].parse().context("parse program_id")?;
-    let payer_path = &args[2];
+    let _payer_path = &args[2]; // reserved for future use
     let pk_dir = PathBuf::from(&args[3]);
-
-    let payer_bytes = std::fs::read(payer_path).context("read payer keypair")?;
-    let payer_json: Vec<u8> = serde_json::from_slice(&payer_bytes).context("parse payer JSON")?;
-    let payer = Keypair::from_bytes(&payer_json).context("keypair from bytes")?;
 
     let rpc_url = "http://127.0.0.1:8899";
     let client = new_client(rpc_url);
@@ -411,7 +405,6 @@ fn do_transfer(
     let receiver = &wallets[recv_idx];
     let sk = sender.laurelin_sk_fr();
     let kp = sender.solana_keypair()?;
-    let sender_pda = sender.pda(program_id);
 
     // Fetch all accounts
     let all_accounts = get_all_accounts(client, program_id)?;

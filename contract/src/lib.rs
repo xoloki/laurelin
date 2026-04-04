@@ -1,11 +1,10 @@
 #![cfg_attr(not(test), no_std)]
+#![allow(unexpected_cfgs, unused_imports)]
 
 #[cfg(not(test))]
 extern crate alloc;
 #[cfg(not(test))]
-use alloc::format;
-#[cfg(not(test))]
-use alloc::vec::Vec;
+use alloc::{format, vec::Vec};
 #[cfg(test)]
 use std::vec::Vec;
 

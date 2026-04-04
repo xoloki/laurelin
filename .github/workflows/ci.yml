@@ -29,11 +29,14 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      # ── Build circuit + wallet together (shared deps compiled once) ─────
+      - name: Build circuit + wallet
+        run: cargo build --release --package laurelin-circuit --package laurelin-wallet --bin laurelin-integration-test
+
       # ── Trusted setup ────────────────────────────────────────────────────
       - name: Run trusted setup (generates pk.bin + contract/src/*_vk_generated.rs)
         run: |
-          cargo run --release --package laurelin-circuit --bin laurelin-setup \
-            -- --pk-dir /tmp/laurelin-setup --vk-dir contract/src
+          ./target/release/laurelin-setup --pk-dir /tmp/laurelin-setup --vk-dir contract/src
 
       # ── Rust / Solana SBF toolchain ─────────────────────────────────────
       - name: Cache Solana install
@@ -78,5 +81,4 @@ jobs:
       # ── Integration test: deposit / transfer / withdraw cycle ──────────────
       - name: Run integration test
         run: |
-          cargo run --release --package laurelin-wallet --bin integration-test -- \
-            "$PROGRAM_ID" /tmp/payer.json /tmp/laurelin-setup
+          ./target/release/integration-test "$PROGRAM_ID" /tmp/payer.json /tmp/laurelin-setup

@@ -91,6 +91,7 @@ fn argon2_derive(password: &[u8], salt: &[u8]) -> anyhow::Result<Zeroizing<[u8; 
     Ok(key)
 }
 
+#[allow(deprecated)]
 fn aes_encrypt(
     solana_sk: &[u8; 32],
     laurelin_sk: &[u8; 32],
@@ -130,6 +131,7 @@ fn aes_encrypt(
     })
 }
 
+#[allow(deprecated)]
 fn aes_decrypt(
     wf: &WalletV2,
     password: &[u8],

@@ -1,4 +1,4 @@
-use crate::state::{G1Point, Groth16Proof, Scalar};
+use crate::state::{G1Point, Groth16Proof};
 
 pub enum LaurelinInstruction {
     /// opcode 0 — create a new account PDA

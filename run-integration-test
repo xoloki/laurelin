@@ -7,9 +7,11 @@ PAYER_KEYPAIR=./accounts/account1.json
 RPC_URL=http://127.0.0.1:8899
 PK_DIR=/tmp/laurelin-setup
 
+echo "==> Building circuit + wallet (shared deps compiled once)..."
+cargo build --release --package laurelin-circuit --package laurelin-wallet
+
 echo "==> Running trusted setup (generates PK + VK files)..."
-cargo run --release --package laurelin-circuit --bin laurelin-setup \
-    -- --pk-dir "$PK_DIR" --vk-dir contract/src
+./target/release/laurelin-setup --pk-dir "$PK_DIR" --vk-dir contract/src
 
 echo "==> Building SBF program..."
 cargo build-sbf --manifest-path contract/Cargo.toml
@@ -27,7 +29,6 @@ PROGRAM_ID=$(echo "$DEPLOY_OUTPUT" | awk '/Program Id:/ {print $3}')
 echo "Program ID: $PROGRAM_ID"
 
 echo "==> Running integration test..."
-cargo run --release --package laurelin-wallet --bin integration-test \
-    -- "$PROGRAM_ID" "$PAYER_KEYPAIR" "$PK_DIR"
+./target/release/laurelin-integration-test "$PROGRAM_ID" "$PAYER_KEYPAIR" "$PK_DIR"
 
 echo "==> Integration test passed."

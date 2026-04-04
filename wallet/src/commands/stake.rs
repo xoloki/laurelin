@@ -62,6 +62,7 @@ pub fn run_list(pubkey: &solana_sdk::pubkey::Pubkey, cfg: &ResolvedConfig) -> an
     let client = new_client(&cfg.rpc_url);
     let staker = *pubkey;
 
+    #[allow(deprecated)]
     let config = RpcProgramAccountsConfig {
         filters: Some(vec![RpcFilterType::Memcmp(Memcmp {
             offset: 12,
@@ -93,6 +94,7 @@ pub fn run_list(pubkey: &solana_sdk::pubkey::Pubkey, cfg: &ResolvedConfig) -> an
 
     for (pubkey, account) in &accounts {
         let sol = account.lamports as f64 / 1e9;
+        #[allow(deprecated)]
         let state_str = client
             .get_stake_activation(*pubkey, None)
             .map(|a| format!("{:?}", a.state))
