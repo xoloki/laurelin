@@ -1,11 +1,5 @@
 target/
-gnark-circuit/setup/*.bin
-gnark-circuit/setup/vk_new.rs
-src/*vk_generated.rs
-gnark-circuit/client
-gnark-circuit/local.env
+contract/src/*vk_generated.rs
 accounts/
 ledger/
 *~
-gnark-circuit/prove
-gnark-circuit/setup.log

@@ -19,7 +19,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       - name: Run Rust unit tests
-        run: cargo test --package laurelin --package laurelin-circuit
+        run: cargo test --package laurelin-contract --package laurelin-circuit
 
   integration:
     name: Integration test
@@ -30,13 +30,10 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
 
       # ── Trusted setup ────────────────────────────────────────────────────
-      - name: Run trusted setup (generates pk.bin + src/*_vk_generated.rs)
+      - name: Run trusted setup (generates pk.bin + contract/src/*_vk_generated.rs)
         run: |
           cargo run --release --package laurelin-circuit --bin laurelin-setup \
-            -- --output-dir /tmp/laurelin-setup
-          cp /tmp/laurelin-setup/deposit_vk_generated.rs  src/deposit_vk_generated.rs
-          cp /tmp/laurelin-setup/withdraw_vk_generated.rs src/withdraw_vk_generated.rs
-          cp /tmp/laurelin-setup/transfer_vk_generated.rs src/transfer_vk_generated.rs
+            -- --pk-dir /tmp/laurelin-setup --vk-dir contract/src
 
       # ── Rust / Solana SBF toolchain ─────────────────────────────────────
       - name: Cache Solana install
@@ -55,7 +52,7 @@ jobs:
         run: echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
 
       - name: Build SBF program
-        run: cargo build-sbf
+        run: cargo build-sbf --manifest-path contract/Cargo.toml
 
       # ── Local validator + deploy ─────────────────────────────────────────
       - name: Start solana-test-validator

@@ -219,39 +219,111 @@ fn main() -> anyhow::Result<()> {
     // After: [650K, 620K, 900K, 630K]
 
     eprintln!("\n=== T1: transfer 0→2, 200000 (slot 0,0) ===");
-    do_transfer(&client, &program_id, &pk_dir, &wallets, 0, 2, 200_000, 0, 0, &table)?;
+    do_transfer(
+        &client,
+        &program_id,
+        &pk_dir,
+        &wallets,
+        0,
+        2,
+        200_000,
+        0,
+        0,
+        &table,
+    )?;
 
     let expected: [u64; 4] = [800_000, 800_000, 800_000, 400_000];
     eprintln!("\n=== Balance check (post-T1) ===");
     for (i, w) in wallets.iter().enumerate() {
-        check_balance(&client, w, &program_id, &table, expected[i], &format!("wallet {i}"))?;
+        check_balance(
+            &client,
+            w,
+            &program_id,
+            &table,
+            expected[i],
+            &format!("wallet {i}"),
+        )?;
     }
 
     eprintln!("\n=== T2: transfer 0→3, 150000 (slot 0,1) ===");
-    do_transfer(&client, &program_id, &pk_dir, &wallets, 0, 3, 150_000, 0, 1, &table)?;
+    do_transfer(
+        &client,
+        &program_id,
+        &pk_dir,
+        &wallets,
+        0,
+        3,
+        150_000,
+        0,
+        1,
+        &table,
+    )?;
 
     let expected: [u64; 4] = [650_000, 800_000, 800_000, 550_000];
     eprintln!("\n=== Balance check (post-T2) ===");
     for (i, w) in wallets.iter().enumerate() {
-        check_balance(&client, w, &program_id, &table, expected[i], &format!("wallet {i}"))?;
+        check_balance(
+            &client,
+            w,
+            &program_id,
+            &table,
+            expected[i],
+            &format!("wallet {i}"),
+        )?;
     }
 
     eprintln!("\n=== T3: transfer 1→2, 100000 (slot 1,0) ===");
-    do_transfer(&client, &program_id, &pk_dir, &wallets, 1, 2, 100_000, 1, 0, &table)?;
+    do_transfer(
+        &client,
+        &program_id,
+        &pk_dir,
+        &wallets,
+        1,
+        2,
+        100_000,
+        1,
+        0,
+        &table,
+    )?;
 
     let expected: [u64; 4] = [650_000, 700_000, 900_000, 550_000];
     eprintln!("\n=== Balance check (post-T3) ===");
     for (i, w) in wallets.iter().enumerate() {
-        check_balance(&client, w, &program_id, &table, expected[i], &format!("wallet {i}"))?;
+        check_balance(
+            &client,
+            w,
+            &program_id,
+            &table,
+            expected[i],
+            &format!("wallet {i}"),
+        )?;
     }
 
     eprintln!("\n=== T4: transfer 1→3, 80000 (slot 1,1) ===");
-    do_transfer(&client, &program_id, &pk_dir, &wallets, 1, 3, 80_000, 1, 1, &table)?;
+    do_transfer(
+        &client,
+        &program_id,
+        &pk_dir,
+        &wallets,
+        1,
+        3,
+        80_000,
+        1,
+        1,
+        &table,
+    )?;
 
     let expected: [u64; 4] = [650_000, 620_000, 900_000, 630_000];
     eprintln!("\n=== Balance check (post-T4) ===");
     for (i, w) in wallets.iter().enumerate() {
-        check_balance(&client, w, &program_id, &table, expected[i], &format!("wallet {i}"))?;
+        check_balance(
+            &client,
+            w,
+            &program_id,
+            &table,
+            expected[i],
+            &format!("wallet {i}"),
+        )?;
     }
 
     // ── Withdrawals ─────────────────────────────────────────────────────────

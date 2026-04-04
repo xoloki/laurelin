@@ -5,17 +5,14 @@ set -e
 
 PAYER_KEYPAIR=./accounts/account1.json
 RPC_URL=http://127.0.0.1:8899
-SETUP_DIR=/tmp/laurelin-setup
+PK_DIR=/tmp/laurelin-setup
 
-echo "==> Running trusted setup (generates PK/VK files)..."
+echo "==> Running trusted setup (generates PK + VK files)..."
 cargo run --release --package laurelin-circuit --bin laurelin-setup \
-    -- --output-dir "$SETUP_DIR"
-cp "$SETUP_DIR"/deposit_vk_generated.rs  src/deposit_vk_generated.rs
-cp "$SETUP_DIR"/withdraw_vk_generated.rs src/withdraw_vk_generated.rs
-cp "$SETUP_DIR"/transfer_vk_generated.rs src/transfer_vk_generated.rs
+    -- --pk-dir "$PK_DIR" --vk-dir contract/src
 
 echo "==> Building SBF program..."
-cargo build-sbf
+cargo build-sbf --manifest-path contract/Cargo.toml
 
 echo "==> Configuring Solana CLI..."
 solana config set --url "$RPC_URL" --keypair "$PAYER_KEYPAIR"
@@ -31,6 +28,6 @@ echo "Program ID: $PROGRAM_ID"
 
 echo "==> Running integration test..."
 cargo run --release --package laurelin-wallet --bin integration-test \
-    -- "$PROGRAM_ID" "$PAYER_KEYPAIR" "$SETUP_DIR"
+    -- "$PROGRAM_ID" "$PAYER_KEYPAIR" "$PK_DIR"
 
 echo "==> Integration test passed."

@@ -2232,19 +2232,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "laurelin"
-version = "0.1.0"
-dependencies = [
- "sha2 0.10.9",
- "solana-client",
- "solana-program",
- "solana-sdk",
- "solana-transaction-status",
- "subtle",
- "zeroize",
-]
-
-[[package]]
 name = "laurelin-circuit"
 version = "0.1.0"
 dependencies = [
@@ -2260,6 +2247,16 @@ dependencies = [
  "ark-snark",
  "ark-std",
  "rand 0.8.5",
+]
+
+[[package]]
+name = "laurelin-contract"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.10.9",
+ "solana-program",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]

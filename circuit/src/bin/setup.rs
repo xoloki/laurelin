@@ -146,16 +146,33 @@ where
     Ok(())
 }
 
+fn get_flag(args: &[String], flag: &str) -> Option<PathBuf> {
+    args.iter().position(|a| a == flag).map(|i| {
+        PathBuf::from(
+            args.get(i + 1)
+                .unwrap_or_else(|| panic!("{flag} requires a value")),
+        )
+    })
+}
+
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = env::args().collect();
-    let out_dir = if let Some(pos) = args.iter().position(|a| a == "--output-dir") {
-        PathBuf::from(args.get(pos + 1).expect("--output-dir requires a value"))
+
+    // --pk-dir: where proving keys go (wallet loads these at runtime)
+    // --vk-dir: where VK .rs files go (contract/src/, included at compile time)
+    // --output-dir: legacy shorthand, sets both to the same directory
+    let (pk_dir, vk_dir) = if let Some(d) = get_flag(&args, "--output-dir") {
+        (d.clone(), d)
     } else {
-        PathBuf::from(".")
+        let pk = get_flag(&args, "--pk-dir").unwrap_or_else(|| PathBuf::from("."));
+        let vk = get_flag(&args, "--vk-dir").unwrap_or_else(|| PathBuf::from("."));
+        (pk, vk)
     };
 
-    fs::create_dir_all(&out_dir)?;
-    eprintln!("Output directory: {}", out_dir.display());
+    fs::create_dir_all(&pk_dir)?;
+    fs::create_dir_all(&vk_dir)?;
+    eprintln!("PK directory: {}", pk_dir.display());
+    eprintln!("VK directory: {}", vk_dir.display());
 
     // ── Deposit ────────────────────────────────────────────────────────────────
     eprintln!("Setting up DepositCircuit…");
@@ -167,8 +184,8 @@ fn main() -> anyhow::Result<()> {
             delta_c2: None,
             amount: None,
         },
-        &out_dir.join("deposit_pk.bin"),
-        &out_dir.join("deposit_vk_generated.rs"),
+        &pk_dir.join("deposit_pk.bin"),
+        &vk_dir.join("deposit_vk_generated.rs"),
         "DEPOSIT_VK",
     )?;
 
@@ -187,8 +204,8 @@ fn main() -> anyhow::Result<()> {
             new_c2: None,
             amount: None,
         },
-        &out_dir.join("withdraw_pk.bin"),
-        &out_dir.join("withdraw_vk_generated.rs"),
+        &pk_dir.join("withdraw_pk.bin"),
+        &vk_dir.join("withdraw_vk_generated.rs"),
         "WITHDRAW_VK",
     )?;
 
@@ -215,8 +232,8 @@ fn main() -> anyhow::Result<()> {
             recv_delta_c1: [None; 2],
             recv_delta_c2: [None; 2],
         },
-        &out_dir.join("transfer_pk.bin"),
-        &out_dir.join("transfer_vk_generated.rs"),
+        &pk_dir.join("transfer_pk.bin"),
+        &vk_dir.join("transfer_vk_generated.rs"),
         "TRANSFER_VK",
     )?;
 
