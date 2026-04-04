@@ -81,4 +81,4 @@ jobs:
       # ── Integration test: deposit / transfer / withdraw cycle ──────────────
       - name: Run integration test
         run: |
-          ./target/release/integration-test "$PROGRAM_ID" /tmp/payer.json /tmp/laurelin-setup
+          ./target/release/laurelin-integration-test "$PROGRAM_ID" /tmp/payer.json /tmp/laurelin-setup
