@@ -18,6 +18,15 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-unit-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-unit-${{ runner.os }}-
+
       - name: Run Rust unit tests
         run: cargo test --package laurelin-contract --package laurelin-circuit
 
@@ -28,6 +37,15 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-integration-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-integration-${{ runner.os }}-
 
       # ── Build circuit + wallet together (shared deps compiled once) ─────
       - name: Build circuit + wallet
