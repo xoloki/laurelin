@@ -24,6 +24,7 @@ pub fn run_list(pubkey: &solana_sdk::pubkey::Pubkey, cfg: &ResolvedConfig) -> an
     let owner = *pubkey;
 
     // getProgramAccounts: token accounts owned by us (owner field at offset 32)
+    #[allow(deprecated)]
     let config = RpcProgramAccountsConfig {
         filters: Some(vec![
             RpcFilterType::DataSize(TokenAccount::LEN as u64),

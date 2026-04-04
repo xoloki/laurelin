@@ -27,11 +27,3 @@ pub fn set_pk_dir(config_path: &Path, path: &str) -> anyhow::Result<()> {
     println!("pk_dir set to {path}");
     Ok(())
 }
-
-pub fn set_prover(config_path: &Path, name: &str) -> anyhow::Result<()> {
-    let mut cfg = Config::load(config_path)?;
-    cfg.prover = Some(name.to_owned());
-    cfg.save(config_path)?;
-    println!("prover set to {name}");
-    Ok(())
-}

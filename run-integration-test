@@ -1,19 +1,26 @@
 #!/usr/bin/env bash
 # Runs the full integration test cycle against a local validator.
-# Prerequisites: docker-compose -f start-testnet.yml up
+# Prerequisites: solana-test-validator running
 set -e
 
 PAYER_KEYPAIR=./accounts/account1.json
 RPC_URL=http://127.0.0.1:8899
+PK_DIR=/tmp/laurelin-setup
 
-echo "==> Running trusted setup (generates PK/VK files)..."
-(cd gnark-circuit && go run ./setup/)
+echo "==> Building circuit + wallet (shared deps compiled once)..."
+cargo build --release --bin laurelin-setup --bin laurelin-integration-test
+
+echo "==> Running trusted setup (generates PK + VK files)..."
+./target/release/laurelin-setup --pk-dir "$PK_DIR" --vk-dir contract/src
 
 echo "==> Building SBF program..."
-cargo build-sbf
+cargo build-sbf --manifest-path contract/Cargo.toml
 
 echo "==> Configuring Solana CLI..."
 solana config set --url "$RPC_URL" --keypair "$PAYER_KEYPAIR"
+
+echo "==> Airdropping SOL to payer..."
+solana airdrop 100
 
 echo "==> Deploying program..."
 DEPLOY_OUTPUT=$(solana program deploy target/deploy/laurelin.so)
@@ -22,6 +29,6 @@ PROGRAM_ID=$(echo "$DEPLOY_OUTPUT" | awk '/Program Id:/ {print $3}')
 echo "Program ID: $PROGRAM_ID"
 
 echo "==> Running integration test..."
-(cd gnark-circuit && go run ./cmd/client/ "$PROGRAM_ID" "../$PAYER_KEYPAIR")
+./target/release/laurelin-integration-test "$PROGRAM_ID" "$PAYER_KEYPAIR" "$PK_DIR"
 
 echo "==> Integration test passed."

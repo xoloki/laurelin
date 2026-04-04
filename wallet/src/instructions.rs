@@ -33,15 +33,13 @@ pub fn set_compute_unit_limit(units: u32) -> Instruction {
 
 // ── Proof block serialisation ─────────────────────────────────────────────────
 
-/// Serialise ProofBytes into the standard 352-byte block:
-/// proofA(64) || proofB(128) || proofC(64) || commitment(64) || commitHash(32)
+/// Serialise ProofBytes into the standard 256-byte block:
+/// proofA(64) || proofB(128) || proofC(64)
 fn proof_block(proof: &ProofBytes) -> Vec<u8> {
-    let mut out = Vec::with_capacity(352);
+    let mut out = Vec::with_capacity(256);
     out.extend_from_slice(&proof.proof_a);
     out.extend_from_slice(&proof.proof_b);
     out.extend_from_slice(&proof.proof_c);
-    out.extend_from_slice(&proof.commitment);
-    out.extend_from_slice(&proof.commit_hash);
     out
 }
 
@@ -76,7 +74,7 @@ pub fn create_account(
 }
 
 /// opcode 0x02: Deposit
-/// data: 0x02 || proof(352) || deltaC1(64) || deltaC2(64) || amount(8 LE) = 489 bytes
+/// data: 0x02 || proof(256) || deltaC1(64) || deltaC2(64) || amount(8 LE) = 393 bytes
 pub fn deposit(
     program_id: &Pubkey,
     payer: &Pubkey,
@@ -87,13 +85,13 @@ pub fn deposit(
     delta_c2: &[u8; 64],
     amount: u64,
 ) -> Instruction {
-    let mut data = Vec::with_capacity(489);
+    let mut data = Vec::with_capacity(393);
     data.push(0x02);
     data.extend_from_slice(&proof_block(proof));
     data.extend_from_slice(delta_c1);
     data.extend_from_slice(delta_c2);
     data.extend_from_slice(&amount.to_le_bytes());
-    debug_assert_eq!(data.len(), 489);
+    debug_assert_eq!(data.len(), 393);
 
     Instruction {
         program_id: *program_id,
@@ -108,12 +106,12 @@ pub fn deposit(
 }
 
 /// opcode 0x01: RingTransfer
-/// data: 0x01 || proof(352)
+/// data: 0x01 || proof(256)
 ///     || senderNewC1[0](64) || senderNewC2[0](64)
 ///     || senderNewC1[1](64) || senderNewC2[1](64)
 ///     || recvDeltaC1[0](64) || recvDeltaC2[0](64)
 ///     || recvDeltaC1[1](64) || recvDeltaC2[1](64)
-/// = 865 bytes
+/// = 769 bytes
 #[allow(clippy::too_many_arguments)]
 pub fn ring_transfer(
     program_id: &Pubkey,
@@ -131,7 +129,7 @@ pub fn ring_transfer(
     recv_delta_c1_1: &[u8; 64],
     recv_delta_c2_1: &[u8; 64],
 ) -> Instruction {
-    let mut data = Vec::with_capacity(865);
+    let mut data = Vec::with_capacity(769);
     data.push(0x01);
     data.extend_from_slice(&proof_block(proof));
     data.extend_from_slice(sender_new_c1_0);
@@ -142,7 +140,7 @@ pub fn ring_transfer(
     data.extend_from_slice(recv_delta_c2_0);
     data.extend_from_slice(recv_delta_c1_1);
     data.extend_from_slice(recv_delta_c2_1);
-    debug_assert_eq!(data.len(), 865);
+    debug_assert_eq!(data.len(), 769);
 
     Instruction {
         program_id: *program_id,
@@ -157,7 +155,7 @@ pub fn ring_transfer(
 }
 
 /// opcode 0x03: Withdraw
-/// data: 0x03 || proof(352) || newC1(64) || newC2(64) || amount(8 LE) = 489 bytes
+/// data: 0x03 || proof(256) || newC1(64) || newC2(64) || amount(8 LE) = 393 bytes
 pub fn withdraw(
     program_id: &Pubkey,
     pda: &Pubkey,
@@ -168,13 +166,13 @@ pub fn withdraw(
     new_c2: &[u8; 64],
     amount: u64,
 ) -> Instruction {
-    let mut data = Vec::with_capacity(489);
+    let mut data = Vec::with_capacity(393);
     data.push(0x03);
     data.extend_from_slice(&proof_block(proof));
     data.extend_from_slice(new_c1);
     data.extend_from_slice(new_c2);
     data.extend_from_slice(&amount.to_le_bytes());
-    debug_assert_eq!(data.len(), 489);
+    debug_assert_eq!(data.len(), 393);
 
     Instruction {
         program_id: *program_id,

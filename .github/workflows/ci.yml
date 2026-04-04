@@ -16,19 +16,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.22"
-          cache-dependency-path: gnark-circuit/go.sum
-
-      - name: Run circuit tests (short)
-        working-directory: gnark-circuit
-        run: go test -short -timeout 300s ./...
-
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-unit-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-unit-${{ runner.os }}-
+
       - name: Run Rust unit tests
-        run: cargo test
+        run: cargo test --package laurelin-contract --package laurelin-circuit
 
   integration:
     name: Integration test
@@ -36,24 +36,34 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── Go + circuit setup ──────────────────────────────────────────────
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.22"
-          cache-dependency-path: gnark-circuit/go.sum
-
-      - name: Run trusted setup (generates pk.bin + src/vk_generated.rs)
-        working-directory: gnark-circuit
-        run: go run ./setup/
-
-      # ── Rust / Solana SBF toolchain ─────────────────────────────────────
       - uses: dtolnay/rust-toolchain@stable
 
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-integration-${{ runner.os }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: cargo-integration-${{ runner.os }}-
+
+      # ── Build circuit + wallet together (shared deps compiled once) ─────
+      - name: Build circuit + wallet
+        run: cargo build --release --bin laurelin-setup --bin laurelin-integration-test
+
+      # ── Trusted setup ────────────────────────────────────────────────────
+      - name: Run trusted setup (generates pk.bin + contract/src/*_vk_generated.rs)
+        run: |
+          ./target/release/laurelin-setup --pk-dir /tmp/laurelin-setup --vk-dir contract/src
+
+      # ── Rust / Solana SBF toolchain ─────────────────────────────────────
       - name: Cache Solana install
         id: cache-solana
         uses: actions/cache@v4
         with:
-          path: ~/.local/share/solana
+          path: |
+            ~/.local/share/solana
+            ~/.cache/solana
           key: solana-v3.1.11
 
       - name: Install Solana CLI v3.1.11
@@ -65,7 +75,7 @@ jobs:
         run: echo "$HOME/.local/share/solana/install/active_release/bin" >> "$GITHUB_PATH"
 
       - name: Build SBF program
-        run: cargo build-sbf
+        run: cargo build-sbf --manifest-path contract/Cargo.toml
 
       # ── Local validator + deploy ─────────────────────────────────────────
       - name: Start solana-test-validator
@@ -88,6 +98,7 @@ jobs:
           PROGRAM_ID=$(echo "$DEPLOY_OUTPUT" | grep -oP 'Program Id: \K\S+')
           echo "PROGRAM_ID=$PROGRAM_ID" >> "$GITHUB_ENV"
 
+      # ── Integration test: deposit / transfer / withdraw cycle ──────────────
       - name: Run integration test
-        working-directory: gnark-circuit
-        run: go run ./cmd/client/ "$PROGRAM_ID" /tmp/payer.json
+        run: |
+          ./target/release/laurelin-integration-test "$PROGRAM_ID" /tmp/payer.json /tmp/laurelin-setup

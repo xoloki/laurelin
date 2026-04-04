@@ -45,12 +45,7 @@
 
 use ark_bn254::Fr;
 use ark_ed_on_bn254::{constraints::EdwardsVar, EdwardsAffine, Fr as BJJFr};
-use ark_r1cs_std::{
-    boolean::Boolean,
-    fields::fp::FpVar,
-    groups::CurveVar,
-    prelude::*,
-};
+use ark_r1cs_std::{boolean::Boolean, fields::fp::FpVar, groups::CurveVar, prelude::*};
 use ark_relations::r1cs::{ConstraintSynthesizer, ConstraintSystemRef, SynthesisError};
 
 use crate::gadgets::{
@@ -97,11 +92,7 @@ fn alloc_points_public<const N: usize>(
 ) -> Result<[EdwardsVar; N], SynthesisError> {
     let v: Vec<EdwardsVar> = pts
         .iter()
-        .map(|p| {
-            EdwardsVar::new_input(cs.clone(), || {
-                p.ok_or(SynthesisError::AssignmentMissing)
-            })
-        })
+        .map(|p| EdwardsVar::new_input(cs.clone(), || p.ok_or(SynthesisError::AssignmentMissing)))
         .collect::<Result<_, _>>()?;
     Ok(v.try_into().unwrap_or_else(|_| unreachable!()))
 }
@@ -211,11 +202,8 @@ impl<const N: usize> ConstraintSynthesizer<Fr> for RingTransferCircuit<N> {
             let decoy_new_c2_i = old_c2_vars[i].clone() + rd_pk;
 
             // expected_new_c1[i] = if sender_hot[i] then r_new_g else decoy_new_c1[i]
-            let expected_c1 = EdwardsVar::conditionally_select(
-                &sender_hot[i],
-                &r_new_g,
-                &decoy_new_c1_i,
-            )?;
+            let expected_c1 =
+                EdwardsVar::conditionally_select(&sender_hot[i], &r_new_g, &decoy_new_c1_i)?;
             expected_c1.enforce_equal(&new_c1_vars[i])?;
 
             // expected_new_c2[i] = if sender_hot[i] then computed_new_c2 else decoy_new_c2[i]
@@ -257,8 +245,7 @@ impl<const N: usize> ConstraintSynthesizer<Fr> for RingTransferCircuit<N> {
             // recv_delta_c2[i] = r_recvs[i] * recv_pks[i]
             let rr_pk = scalar_mul(&recv_pk_vars[i], &r_recv_bits[i])?;
 
-            let expected_dc1 =
-                EdwardsVar::conditionally_select(&recv_hot[i], &r_t_g, &rr_g)?;
+            let expected_dc1 = EdwardsVar::conditionally_select(&recv_hot[i], &r_t_g, &rr_g)?;
             expected_dc1.enforce_equal(&recv_dc1_vars[i])?;
 
             let expected_dc2 =

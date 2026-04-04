@@ -1,13 +1,13 @@
-//! `init` — generate a new Solana + BN254 keypair and save to wallet file.
+//! `init` — generate a new Solana + BJJ keypair and save to wallet file.
 
 use std::path::Path;
 
-use ark_bn254::Fr;
+use ark_ed_on_bn254::Fr as BJJFr;
 use ark_std::UniformRand;
 use solana_sdk::signature::{Keypair, Signer};
 use zeroize::Zeroizing;
 
-use crate::{bn254::fr_to_bytes, wallet::Wallet};
+use crate::{bjj::bjj_fr_to_bytes, wallet::Wallet};
 
 pub fn run(wallet_path: &Path, insecure: bool) -> anyhow::Result<()> {
     if wallet_path.exists() {
@@ -22,10 +22,10 @@ pub fn run(wallet_path: &Path, insecure: bool) -> anyhow::Result<()> {
     let kp_bytes = kp.to_bytes(); // 64 bytes: seed (32) || pubkey (32)
     let solana_sk: [u8; 32] = kp_bytes[..32].try_into().unwrap();
 
-    // Laurelin: random BN254 scalar
+    // Laurelin: random BJJ scalar
     let mut rng = rand::thread_rng();
-    let laurelin_sk_fr = Fr::rand(&mut rng);
-    let laurelin_sk = fr_to_bytes(&laurelin_sk_fr);
+    let laurelin_sk_fr = BJJFr::rand(&mut rng);
+    let laurelin_sk = bjj_fr_to_bytes(&laurelin_sk_fr);
 
     if insecure {
         Wallet::save_plaintext(wallet_path, &solana_sk, &laurelin_sk)?;
@@ -36,7 +36,7 @@ pub fn run(wallet_path: &Path, insecure: bool) -> anyhow::Result<()> {
 
     println!("Wallet created at {}", wallet_path.display());
     println!("Solana pubkey:  {}", kp.pubkey());
-    println!("\nRun `laurelin-wallet pubkey` to see your BN254 pubkey and PDA.");
+    println!("\nRun `laurelin-wallet pubkey` to see your BJJ pubkey and PDA.");
     Ok(())
 }
 

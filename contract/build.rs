@@ -6,7 +6,7 @@ fn stub_vk(path: &str, var_name: &str) {
         std::fs::write(
             p,
             format!(
-                "// Stub — run `cd circuit && go run ./setup` to generate the real VK.\n\
+                "// Stub — run `cargo run --release --bin laurelin-setup` to generate the real VK.\n\
                  static {var_name}: VerificationKey = VerificationKey {{\n\
                  \x20   alpha: [0u8; 64],\n\
                  \x20   beta:  [0u8; 128],\n\
@@ -17,7 +17,7 @@ fn stub_vk(path: &str, var_name: &str) {
             ),
         )
         .unwrap_or_else(|_| panic!("failed to write stub {path}"));
-        println!("cargo:warning={path} not found; wrote stub. Run `cd circuit && go run ./setup` to regenerate.");
+        println!("cargo:warning={path} not found; wrote stub. Run `cargo run --release --bin laurelin-setup` to regenerate.");
     }
     println!("cargo:rerun-if-changed={path}");
 }

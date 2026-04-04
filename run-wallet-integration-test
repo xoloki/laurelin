@@ -24,7 +24,7 @@ if [ -n "${2:-}" ]; then
 fi
 
 program=4eesfezqbNcYSJLmQqvxN38CdsccYGFYUaZdBgQp7a2L
-pk_dir=/Users/axoloki/src/laurelin/gnark-circuit/setup
+pk_dir=/tmp/laurelin-setup
 url=http://localhost:8899
 
 PASS=0; FAIL=0

@@ -4,12 +4,15 @@
 //! (self + receiver + 2 decoys).  SenderIdx and RecvIdx are randomised for
 //! privacy.
 
-use ark_bn254::{Fr, G1Affine};
+use ark_ed_on_bn254::{EdwardsAffine, Fr as BJJFr};
 use ark_std::UniformRand;
 use solana_sdk::pubkey::Pubkey;
 
 use crate::{
-    bn254::{bsgs_decrypt, g1_to_bytes, generator, point_add, scalar_mul, BsgsTable, MAX_CONFIDENTIAL_LAMPORTS},
+    bjj::{
+        bsgs_decrypt, coord_to_bytes, generator, point_add, point_to_bytes, scalar_mul, BsgsTable,
+        MAX_CONFIDENTIAL_LAMPORTS,
+    },
     config::ResolvedConfig,
     instructions::{ring_transfer, set_compute_unit_limit},
     prover::prove_transfer,
@@ -19,12 +22,7 @@ use crate::{
     wallet::Wallet,
 };
 
-pub fn run(
-    wallet: &Wallet,
-    cfg: &ResolvedConfig,
-    lamports: u64,
-    to: &str,
-) -> anyhow::Result<()> {
+pub fn run(wallet: &Wallet, cfg: &ResolvedConfig, lamports: u64, to: &str) -> anyhow::Result<()> {
     let client = new_client(&cfg.rpc_url);
     let kp = wallet.solana_keypair()?;
     let program_id: Pubkey = cfg.program_id.parse()?;
@@ -53,8 +51,7 @@ pub fn run(
     let mut others: Vec<LaurelinkAccount> = Vec::new();
 
     for acc in all_accounts {
-        use crate::bn254::fq_to_bytes;
-        let x_bytes = fq_to_bytes(&acc.laurelin_pk.x);
+        let x_bytes = coord_to_bytes(&acc.laurelin_pk.x);
         if x_bytes == wallet.laurelin_pk_bytes[..32] {
             // this is self — we'll fetch fresh below
         } else if x_bytes == recv_pk_x {
@@ -121,16 +118,16 @@ pub fn run(
     let g = generator();
 
     // Randomness
-    let r_new = Fr::rand(&mut rng);
-    let r_decoy = Fr::rand(&mut rng);
-    let r_t = Fr::rand(&mut rng);
-    let r_recv = Fr::rand(&mut rng);
+    let r_new = BJJFr::rand(&mut rng);
+    let r_decoy = BJJFr::rand(&mut rng);
+    let r_t = BJJFr::rand(&mut rng);
+    let r_recv = BJJFr::rand(&mut rng);
 
     // Real sender: fresh ciphertext encrypting new_balance
     let sender_new_c1_real = scalar_mul(&g, &r_new);
     let sender_new_c2_real = point_add(
         &scalar_mul(&my_account.laurelin_pk, &r_new),
-        &scalar_mul(&g, &Fr::from(new_balance)),
+        &scalar_mul(&g, &BJJFr::from(new_balance)),
     );
 
     // Decoy sender: re-randomize (additive blinding, same balance)
@@ -146,7 +143,7 @@ pub fn run(
     let recv_delta_c1_real = scalar_mul(&g, &r_t);
     let recv_delta_c2_real = point_add(
         &scalar_mul(&receiver_acc.laurelin_pk, &r_t),
-        &scalar_mul(&g, &Fr::from(lamports)),
+        &scalar_mul(&g, &BJJFr::from(lamports)),
     );
 
     // Decoy receiver: zero delta (re-randomized)
@@ -154,10 +151,10 @@ pub fn run(
     let recv_delta_c2_decoy = scalar_mul(&decoy_recv.laurelin_pk, &r_recv);
 
     // Map to ring slots
-    let mut sender_new_c1 = [G1Affine::default(); 2];
-    let mut sender_new_c2 = [G1Affine::default(); 2];
-    let mut recv_delta_c1 = [G1Affine::default(); 2];
-    let mut recv_delta_c2 = [G1Affine::default(); 2];
+    let mut sender_new_c1 = [EdwardsAffine::zero(); 2];
+    let mut sender_new_c2 = [EdwardsAffine::zero(); 2];
+    let mut recv_delta_c1 = [EdwardsAffine::zero(); 2];
+    let mut recv_delta_c2 = [EdwardsAffine::zero(); 2];
 
     sender_new_c1[sender_idx] = sender_new_c1_real;
     sender_new_c2[sender_idx] = sender_new_c2_real;
@@ -169,34 +166,35 @@ pub fn run(
     recv_delta_c2[1 - recv_idx] = recv_delta_c2_decoy;
 
     let pk_path = cfg.pk_dir.join("transfer_pk.bin");
-    let pk_path_str = pk_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("pk_dir path is not valid UTF-8"))?;
+
+    // r_decoys[i]: re-randomization factor for sender slot i (circuit uses [1-sender_idx])
+    // r_recvs[i]: randomness for receiver slot i (circuit uses [1-recv_idx])
+    let r_decoys = [r_decoy; 2];
+    let r_recvs = [r_recv; 2];
 
     eprintln!(
         "Proving ring transfer ({lamports} lamports, senderIdx={sender_idx} recvIdx={recv_idx})…"
     );
     let proof = prove_transfer(
-        &cfg.prover,
-        pk_path_str,
+        &pk_path,
         &sk,
         &r_new,
-        &r_decoy,
+        r_decoys,
         &r_t,
-        &r_recv,
+        r_recvs,
         my_balance,
         lamports,
         new_balance,
         sender_idx,
         recv_idx,
-        [&sender_accs[0].laurelin_pk, &sender_accs[1].laurelin_pk],
-        [&sender_accs[0].ciphertext.c1, &sender_accs[1].ciphertext.c1],
-        [&sender_accs[0].ciphertext.c2, &sender_accs[1].ciphertext.c2],
-        [&sender_new_c1[0], &sender_new_c1[1]],
-        [&sender_new_c2[0], &sender_new_c2[1]],
-        [&recv_accs[0].laurelin_pk, &recv_accs[1].laurelin_pk],
-        [&recv_delta_c1[0], &recv_delta_c1[1]],
-        [&recv_delta_c2[0], &recv_delta_c2[1]],
+        [sender_accs[0].laurelin_pk, sender_accs[1].laurelin_pk],
+        [sender_accs[0].ciphertext.c1, sender_accs[1].ciphertext.c1],
+        [sender_accs[0].ciphertext.c2, sender_accs[1].ciphertext.c2],
+        [sender_new_c1[0], sender_new_c1[1]],
+        [sender_new_c2[0], sender_new_c2[1]],
+        [recv_accs[0].laurelin_pk, recv_accs[1].laurelin_pk],
+        [recv_delta_c1[0], recv_delta_c1[1]],
+        [recv_delta_c2[0], recv_delta_c2[1]],
     )?;
 
     let ix = ring_transfer(
@@ -206,14 +204,14 @@ pub fn run(
         &recv_accs[0].pubkey,
         &recv_accs[1].pubkey,
         &proof,
-        &g1_to_bytes(&sender_new_c1[0]),
-        &g1_to_bytes(&sender_new_c2[0]),
-        &g1_to_bytes(&sender_new_c1[1]),
-        &g1_to_bytes(&sender_new_c2[1]),
-        &g1_to_bytes(&recv_delta_c1[0]),
-        &g1_to_bytes(&recv_delta_c2[0]),
-        &g1_to_bytes(&recv_delta_c1[1]),
-        &g1_to_bytes(&recv_delta_c2[1]),
+        &point_to_bytes(&sender_new_c1[0]),
+        &point_to_bytes(&sender_new_c2[0]),
+        &point_to_bytes(&sender_new_c1[1]),
+        &point_to_bytes(&sender_new_c2[1]),
+        &point_to_bytes(&recv_delta_c1[0]),
+        &point_to_bytes(&recv_delta_c2[0]),
+        &point_to_bytes(&recv_delta_c1[1]),
+        &point_to_bytes(&recv_delta_c2[1]),
     );
 
     let sig = send_instructions(&client, &kp, &[set_compute_unit_limit(1_400_000), ix])?;

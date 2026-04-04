@@ -1,11 +1,14 @@
 //! `withdraw <lamports>` — withdraw from the confidential balance to SOL.
 
-use ark_bn254::Fr;
+use ark_ed_on_bn254::Fr as BJJFr;
 use ark_std::UniformRand;
 use solana_sdk::{pubkey::Pubkey, signature::Signer};
 
 use crate::{
-    bn254::{bsgs_decrypt, g1_to_bytes, generator, point_add, scalar_mul, BsgsTable, MAX_CONFIDENTIAL_LAMPORTS},
+    bjj::{
+        bsgs_decrypt, generator, point_add, point_to_bytes, scalar_mul, BsgsTable,
+        MAX_CONFIDENTIAL_LAMPORTS,
+    },
     config::ResolvedConfig,
     instructions::{set_compute_unit_limit, vault_pda, withdraw},
     prover::prove_withdraw,
@@ -46,23 +49,19 @@ pub fn run(wallet: &Wallet, cfg: &ResolvedConfig, lamports: u64) -> anyhow::Resu
 
     // Re-encrypt new balance
     let mut rng = rand::thread_rng();
-    let r_new = Fr::rand(&mut rng);
+    let r_new = BJJFr::rand(&mut rng);
     let g = generator();
     let new_c1 = scalar_mul(&g, &r_new);
     let new_c2 = point_add(
         &scalar_mul(&wallet.laurelin_pk, &r_new),
-        &scalar_mul(&g, &Fr::from(new_balance)),
+        &scalar_mul(&g, &BJJFr::from(new_balance)),
     );
 
     let pk_path = cfg.pk_dir.join("withdraw_pk.bin");
-    let pk_path_str = pk_path
-        .to_str()
-        .ok_or_else(|| anyhow::anyhow!("pk_dir path is not valid UTF-8"))?;
 
     eprintln!("Proving withdrawal ({lamports} lamports, remaining {new_balance})…");
     let proof = prove_withdraw(
-        &cfg.prover,
-        pk_path_str,
+        &pk_path,
         &sk,
         &r_new,
         old_balance,
@@ -81,8 +80,8 @@ pub fn run(wallet: &Wallet, cfg: &ResolvedConfig, lamports: u64) -> anyhow::Resu
         &vault,
         &kp.pubkey(),
         &proof,
-        &g1_to_bytes(&new_c1),
-        &g1_to_bytes(&new_c2),
+        &point_to_bytes(&new_c1),
+        &point_to_bytes(&new_c2),
         lamports,
     );
 

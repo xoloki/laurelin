@@ -23,9 +23,9 @@ use aes_gcm::{
 };
 use anyhow::Context;
 use argon2::{Algorithm, Argon2, Params, Version};
-use ark_bn254::{Fr, G1Affine};
-use rand::RngCore;
+use ark_ed_on_bn254::{EdwardsAffine, Fr as BJJFr};
 use rand::rngs::OsRng;
+use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use solana_sdk::{
     pubkey::Pubkey,
@@ -33,16 +33,13 @@ use solana_sdk::{
 };
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::bn254::{fr_from_bytes, g1_to_bytes, generator, scalar_mul};
+use crate::bjj::{bjj_fr_from_bytes, generator, point_to_bytes, scalar_mul};
 use crate::config::laurelin_dir;
 
 // ── Argon2id / AES-GCM constants ─────────────────────────────────────────────
 
-/// Argon2id memory cost: 256 MB (in kibibytes).
 const ARGON2_M_COST: u32 = 256 * 1024;
-/// Argon2id time cost (iterations).
 const ARGON2_T_COST: u32 = 4;
-/// Argon2id parallelism.
 const ARGON2_P_COST: u32 = 2;
 const ARGON2_SALT_LEN: usize = 16;
 const AES_KEY_LEN: usize = 32;
@@ -58,32 +55,21 @@ struct VersionProbe {
 /// Version 1: plaintext (--insecure / backward compat).
 #[derive(Serialize, Deserialize)]
 struct WalletV1 {
-    version: u32,        // = 1
-    solana_sk: String,   // 32-byte Ed25519 seed, hex-encoded
-    laurelin_sk: String, // 32-byte BN254 scalar, hex-encoded
+    version: u32,
+    solana_sk: String,
+    laurelin_sk: String,
 }
 
 /// Version 2: AES-256-GCM encrypted with Argon2id key derivation.
-///
-/// One Argon2 derivation (single salt → single key); each 32-byte secret key
-/// encrypted with its own nonce.  `solana_pubkey` is stored in plaintext so
-/// read-only operations (history, token list, stake list, etc.) never need to
-/// prompt for a password.
 #[derive(Serialize, Deserialize)]
 struct WalletV2 {
-    version: u32, // = 2
-    /// Solana pubkey, base58-encoded.  Public information; stored unencrypted.
+    version: u32,
     #[serde(default)]
     solana_pubkey: String,
-    /// 16-byte Argon2 salt, hex-encoded.
     argon2_salt: String,
-    /// 12-byte nonce for the Solana sk ciphertext, hex-encoded.
     solana_nonce: String,
-    /// AES-GCM ciphertext of the 32-byte Solana seed, hex-encoded.
     solana_ciphertext: String,
-    /// 12-byte nonce for the Laurelin sk ciphertext, hex-encoded.
     laurelin_nonce: String,
-    /// AES-GCM ciphertext of the 32-byte Laurelin sk, hex-encoded.
     laurelin_ciphertext: String,
 }
 
@@ -105,6 +91,7 @@ fn argon2_derive(password: &[u8], salt: &[u8]) -> anyhow::Result<Zeroizing<[u8; 
     Ok(key)
 }
 
+#[allow(deprecated)]
 fn aes_encrypt(
     solana_sk: &[u8; 32],
     laurelin_sk: &[u8; 32],
@@ -144,6 +131,7 @@ fn aes_encrypt(
     })
 }
 
+#[allow(deprecated)]
 fn aes_decrypt(
     wf: &WalletV2,
     password: &[u8],
@@ -187,13 +175,12 @@ fn aes_decrypt(
 
 // ── Public API ────────────────────────────────────────────────────────────────
 
-/// Loaded wallet.  All secret key material is in `Zeroizing` wrappers and is
-/// overwritten with zeros when this struct is dropped.
+/// Loaded wallet.  All secret key material is in `Zeroizing` wrappers.
 pub struct Wallet {
     pub solana_sk: Zeroizing<[u8; 32]>,
     pub laurelin_sk: Zeroizing<[u8; 32]>,
-    pub laurelin_pk: G1Affine,
-    /// Laurelin public key as 64-byte X||Y (for on-chain use).
+    pub laurelin_pk: EdwardsAffine,
+    /// Laurelin public key as 64-byte X||Y (big-endian BN254 Fr coords).
     pub laurelin_pk_bytes: [u8; 64],
 }
 
@@ -210,17 +197,14 @@ impl Wallet {
             1 => {
                 let wf: WalletV1 = serde_json::from_str(&data)
                     .with_context(|| format!("parse wallet v1 {}", path.display()))?;
-
                 let solana_bytes = hex::decode(&wf.solana_sk).context("decode solana_sk")?;
                 let solana_arr: [u8; 32] = solana_bytes
                     .try_into()
                     .map_err(|_| anyhow::anyhow!("solana_sk must be 32 bytes"))?;
-
                 let laurelin_bytes = hex::decode(&wf.laurelin_sk).context("decode laurelin_sk")?;
                 let laurelin_arr: [u8; 32] = laurelin_bytes
                     .try_into()
                     .map_err(|_| anyhow::anyhow!("laurelin_sk must be 32 bytes"))?;
-
                 (Zeroizing::new(solana_arr), Zeroizing::new(laurelin_arr))
             }
             2 => {
@@ -232,9 +216,10 @@ impl Wallet {
             v => anyhow::bail!("unsupported wallet version {v}"),
         };
 
-        let laurelin_sk_fr: Fr = fr_from_bytes(&laurelin_sk);
-        let laurelin_pk: G1Affine = scalar_mul(&generator(), &laurelin_sk_fr);
-        let laurelin_pk_bytes = g1_to_bytes(&laurelin_pk);
+        // Derive BJJ public key from secret key
+        let laurelin_sk_fr: BJJFr = bjj_fr_from_bytes(&laurelin_sk);
+        let laurelin_pk: EdwardsAffine = scalar_mul(&generator(), &laurelin_sk_fr);
+        let laurelin_pk_bytes = point_to_bytes(&laurelin_pk);
 
         Ok(Wallet {
             solana_sk,
@@ -245,9 +230,6 @@ impl Wallet {
     }
 
     /// Load only the Solana pubkey without decrypting.
-    ///
-    /// For v2 wallets created before this field was added (empty `solana_pubkey`),
-    /// falls back to full decryption.  For v1 the seed is already plaintext.
     pub fn load_pubkey(path: &Path) -> anyhow::Result<Pubkey> {
         let data = std::fs::read_to_string(path)
             .with_context(|| format!("read wallet {}", path.display()))?;
@@ -272,7 +254,6 @@ impl Wallet {
                         .parse()
                         .context("parse solana_pubkey from wallet")
                 } else {
-                    // Old wallet file without the plaintext pubkey — decrypt to derive it.
                     let password = Zeroizing::new(rpassword::prompt_password("Wallet password: ")?);
                     let (solana_sk, _) = aes_decrypt(&wf, password.as_bytes())?;
                     let keypair = solana_sdk::signature::Keypair::from_seed(&*solana_sk)
@@ -284,8 +265,7 @@ impl Wallet {
         }
     }
 
-    /// Save an encrypted (version 2) wallet.  `password` must already be
-    /// collected and confirmed by the caller.
+    /// Save an encrypted (version 2) wallet.
     pub fn save_encrypted(
         path: &Path,
         solana_sk: &[u8; 32],
@@ -318,9 +298,9 @@ impl Wallet {
             .map_err(|e| anyhow::anyhow!("invalid solana seed: {e}"))
     }
 
-    /// Return the Laurelin secret key as Fr.
-    pub fn laurelin_sk_fr(&self) -> Fr {
-        fr_from_bytes(&*self.laurelin_sk)
+    /// Return the Laurelin secret key as BJJFr.
+    pub fn laurelin_sk_fr(&self) -> BJJFr {
+        bjj_fr_from_bytes(&*self.laurelin_sk)
     }
 
     /// Compute the Laurelin PDA for this wallet under the given program.

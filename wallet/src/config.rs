@@ -17,8 +17,6 @@ pub struct Config {
     pub program_id: Option<String>,
     pub rpc_url: Option<String>,
     pub pk_dir: Option<String>,
-    /// Name or full path of the laurelin prover binary (default: "laurelin-prover").
-    pub prover: Option<String>,
 }
 
 impl Config {
@@ -54,7 +52,6 @@ pub struct ResolvedConfig {
     pub program_id: String,
     pub rpc_url: String,
     pub pk_dir: PathBuf,
-    pub prover: String,
 }
 
 impl ResolvedConfig {
@@ -88,16 +85,10 @@ impl ResolvedConfig {
             .map(PathBuf::from)
             .unwrap_or_else(default_pk_dir);
 
-        let prover = cfg
-            .prover
-            .clone()
-            .unwrap_or_else(|| "laurelin-prover".to_owned());
-
         Ok(ResolvedConfig {
             program_id,
             rpc_url,
             pk_dir,
-            prover,
         })
     }
 }

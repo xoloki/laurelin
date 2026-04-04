@@ -2232,22 +2232,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "laurelin"
-version = "0.1.0"
-dependencies = [
- "sha2 0.10.9",
- "solana-client",
- "solana-program",
- "solana-sdk",
- "solana-transaction-status",
- "subtle",
- "zeroize",
-]
-
-[[package]]
 name = "laurelin-circuit"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "ark-bn254",
  "ark-ec",
  "ark-ed-on-bn254",
@@ -2255,8 +2243,20 @@ dependencies = [
  "ark-groth16",
  "ark-r1cs-std",
  "ark-relations",
+ "ark-serialize",
  "ark-snark",
  "ark-std",
+ "rand 0.8.5",
+]
+
+[[package]]
+name = "laurelin-contract"
+version = "0.1.0"
+dependencies = [
+ "sha2 0.10.9",
+ "solana-program",
+ "subtle",
+ "zeroize",
 ]
 
 [[package]]
@@ -2268,12 +2268,17 @@ dependencies = [
  "argon2",
  "ark-bn254",
  "ark-ec",
+ "ark-ed-on-bn254",
  "ark-ff",
+ "ark-groth16",
+ "ark-serialize",
+ "ark-snark",
  "ark-std",
  "bs58 0.5.1",
  "clap 4.6.0",
  "dirs",
  "hex",
+ "laurelin-circuit",
  "rand 0.8.5",
  "rpassword",
  "serde",
