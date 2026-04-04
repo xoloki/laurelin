@@ -46,21 +46,17 @@ fn proof_block(proof: &ProofBytes) -> Vec<u8> {
 // ── Instruction builders ──────────────────────────────────────────────────────
 
 /// opcode 0x00: CreateAccount
-/// data: 0x00 || pubkey(64) || c1(64) || c2(64) = 193 bytes
+/// data: 0x00 || pubkey(64) = 65 bytes
 pub fn create_account(
     program_id: &Pubkey,
     payer: &Pubkey,
     pda: &Pubkey,
-    bn254_pk: &[u8; 64],
-    c1: &[u8; 64],
-    c2: &[u8; 64],
+    bjj_pk: &[u8; 64],
 ) -> Instruction {
-    let mut data = Vec::with_capacity(193);
+    let mut data = Vec::with_capacity(65);
     data.push(0x00);
-    data.extend_from_slice(bn254_pk);
-    data.extend_from_slice(c1);
-    data.extend_from_slice(c2);
-    debug_assert_eq!(data.len(), 193);
+    data.extend_from_slice(bjj_pk);
+    debug_assert_eq!(data.len(), 65);
 
     Instruction {
         program_id: *program_id,

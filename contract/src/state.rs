@@ -1,13 +1,18 @@
+/// Baby JubJub point: X||Y, 64 bytes big-endian. Identity = (0, 1).
+pub type BJJPoint = [u8; 64];
+/// BN254 G1 point: X||Y, 64 bytes big-endian (used in Groth16 proofs).
 pub type G1Point = [u8; 64];
+/// BN254 G2 point: x.c1||x.c0||y.c1||y.c0, 128 bytes big-endian EIP-197.
 pub type G2Point = [u8; 128];
+/// BN254 Fr scalar, 32 bytes big-endian (BJJ coordinates are also BN254 Fr).
 pub type Scalar = [u8; 32];
 
 /// On-chain account state stored in a PDA.
 /// Total: 192 bytes
 pub struct AccountState {
-    pub pubkey: G1Point, // account's BN254 public key P = sk*G
-    pub c1: G1Point,     // r*G
-    pub c2: G1Point,     // r*P + v*G
+    pub pubkey: BJJPoint, // account's BJJ public key P = sk*G
+    pub c1: BJJPoint,     // ElGamal C1 = r*G
+    pub c2: BJJPoint,     // ElGamal C2 = r*P + v*G
 }
 
 impl AccountState {

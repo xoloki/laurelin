@@ -30,7 +30,7 @@ use groth16::{verify, VerificationKey};
 use instruction::{
     parse_create_account, parse_deposit, parse_ring_transfer, parse_withdraw, LaurelinInstruction,
 };
-use state::{AccountState, G1Point};
+use state::{AccountState, BJJPoint};
 
 #[cfg(not(test))]
 use solana_program::entrypoint;
@@ -93,11 +93,17 @@ fn process_create_account(
     accounts: &[AccountInfo],
     data: &[u8],
 ) -> ProgramResult {
-    let LaurelinInstruction::CreateAccount { pubkey, c1, c2 } =
+    let LaurelinInstruction::CreateAccount { pubkey } =
         parse_create_account(data).ok_or(ProgramError::InvalidInstructionData)?
     else {
         return Err(ProgramError::InvalidInstructionData);
     };
+
+    // Initial ciphertext is the BJJ identity (0, 1) — encrypts zero balance.
+    let mut identity = [0u8; 64];
+    identity[63] = 1;
+    let c1 = identity;
+    let c2 = identity;
     if accounts.len() < 3 {
         return Err(ProgramError::NotEnoughAccountKeys);
     }
@@ -357,7 +363,7 @@ fn process_withdraw(program_id: &Pubkey, accounts: &[AccountInfo], data: &[u8]) 
 // No limb decomposition needed (BJJ coords are the native field elements).
 
 /// Push a BJJ point's X and Y coordinates as two 32-byte scalars.
-fn push_point(inputs: &mut Vec<state::Scalar>, pt: &G1Point) {
+fn push_point(inputs: &mut Vec<state::Scalar>, pt: &BJJPoint) {
     let mut x = [0u8; 32];
     let mut y = [0u8; 32];
     x.copy_from_slice(&pt[0..32]);
@@ -372,9 +378,9 @@ fn push_point(inputs: &mut Vec<state::Scalar>, pt: &G1Point) {
 ///   pk (2 Fr), delta_c1 (2 Fr), delta_c2 (2 Fr), amount (1 Fr)
 /// Total: 7, IC.len() = 8.
 fn build_deposit_public_inputs(
-    pk: &G1Point,
-    delta_c1: &G1Point,
-    delta_c2: &G1Point,
+    pk: &BJJPoint,
+    delta_c1: &BJJPoint,
+    delta_c2: &BJJPoint,
     amount: u64,
 ) -> Vec<state::Scalar> {
     let mut inputs = Vec::with_capacity(7);
@@ -394,8 +400,8 @@ fn build_deposit_public_inputs(
 /// Total: 11, IC.len() = 12.
 fn build_withdraw_public_inputs(
     state: &AccountState,
-    new_c1: &G1Point,
-    new_c2: &G1Point,
+    new_c1: &BJJPoint,
+    new_c2: &BJJPoint,
     amount: u64,
 ) -> Vec<state::Scalar> {
     let mut inputs = Vec::with_capacity(11);
@@ -425,10 +431,10 @@ fn build_withdraw_public_inputs(
 fn build_ring_public_inputs(
     sender_state: &[AccountState; 2],
     recv_state: &[AccountState; 2],
-    sender_new_c1: &[G1Point; 2],
-    sender_new_c2: &[G1Point; 2],
-    recv_delta_c1: &[G1Point; 2],
-    recv_delta_c2: &[G1Point; 2],
+    sender_new_c1: &[BJJPoint; 2],
+    sender_new_c2: &[BJJPoint; 2],
+    recv_delta_c1: &[BJJPoint; 2],
+    recv_delta_c2: &[BJJPoint; 2],
 ) -> Vec<state::Scalar> {
     let mut inputs = Vec::with_capacity(32);
 
@@ -464,7 +470,7 @@ fn build_ring_public_inputs(
 mod tests {
     use super::*;
 
-    fn make_point(x_lsb: u8, y_lsb: u8) -> state::G1Point {
+    fn make_point(x_lsb: u8, y_lsb: u8) -> state::BJJPoint {
         let mut p = [0u8; 64];
         p[31] = x_lsb;
         p[63] = y_lsb;

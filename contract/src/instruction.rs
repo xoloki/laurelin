@@ -1,13 +1,9 @@
-use crate::state::{G1Point, Groth16Proof};
+use crate::state::{BJJPoint, Groth16Proof};
 
 pub enum LaurelinInstruction {
     /// opcode 0 — create a new account PDA
-    /// data: pubkey (64) || c1 (64) || c2 (64)
-    CreateAccount {
-        pubkey: G1Point,
-        c1: G1Point,
-        c2: G1Point,
-    },
+    /// data: pubkey (64)
+    CreateAccount { pubkey: BJJPoint },
 
     /// opcode 1 — 2+2 ring transfer with Groth16 balance proof
     ///
@@ -23,11 +19,11 @@ pub enum LaurelinInstruction {
     RingTransfer {
         proof: Groth16Proof,
         /// New sender ciphertexts (both ring members updated)
-        sender_new_c1: [G1Point; 2],
-        sender_new_c2: [G1Point; 2],
+        sender_new_c1: [BJJPoint; 2],
+        sender_new_c2: [BJJPoint; 2],
         /// Receiver deltas (slot i added to recvPDA[i])
-        recv_delta_c1: [G1Point; 2],
-        recv_delta_c2: [G1Point; 2],
+        recv_delta_c1: [BJJPoint; 2],
+        recv_delta_c2: [BJJPoint; 2],
     },
 
     /// opcode 2 — deposit lamports with Groth16 delta proof
@@ -38,8 +34,8 @@ pub enum LaurelinInstruction {
     /// accounts: [payer (write, signer), pda (write), vault_pda (write), system_program]
     Deposit {
         proof: Groth16Proof,
-        delta_c1: G1Point,
-        delta_c2: G1Point,
+        delta_c1: BJJPoint,
+        delta_c2: BJJPoint,
         amount: u64,
     },
 
@@ -51,24 +47,20 @@ pub enum LaurelinInstruction {
     /// accounts: [pda (write), vault_pda (write), destination (write)]
     Withdraw {
         proof: Groth16Proof,
-        new_c1: G1Point,
-        new_c2: G1Point,
+        new_c1: BJJPoint,
+        new_c2: BJJPoint,
         amount: u64,
     },
 }
 
-/// Parse a CreateAccount payload (no opcode byte): pubkey(64) || c1(64) || c2(64)
+/// Parse a CreateAccount payload (no opcode byte): pubkey(64)
 pub fn parse_create_account(data: &[u8]) -> Option<LaurelinInstruction> {
-    if data.len() < 192 {
+    if data.len() < 64 {
         return None;
     }
     let mut pubkey = [0u8; 64];
-    let mut c1 = [0u8; 64];
-    let mut c2 = [0u8; 64];
     pubkey.copy_from_slice(&data[0..64]);
-    c1.copy_from_slice(&data[64..128]);
-    c2.copy_from_slice(&data[128..192]);
-    Some(LaurelinInstruction::CreateAccount { pubkey, c1, c2 })
+    Some(LaurelinInstruction::CreateAccount { pubkey })
 }
 
 /// Parse a RingTransfer payload (no opcode byte):
@@ -169,16 +161,14 @@ mod tests {
 
     #[test]
     fn create_account_parses_correctly() {
-        let mut data = [0u8; 193];
+        let mut data = [0u8; 65];
         data[0] = 0;
-        for i in 1..193 {
+        for i in 1..65 {
             data[i] = i as u8;
         }
         match LaurelinInstruction::try_from_bytes(&data).unwrap() {
-            LaurelinInstruction::CreateAccount { pubkey, c1, c2 } => {
+            LaurelinInstruction::CreateAccount { pubkey } => {
                 assert_eq!(&pubkey[..], &data[1..65]);
-                assert_eq!(&c1[..], &data[65..129]);
-                assert_eq!(&c2[..], &data[129..193]);
             }
             _ => panic!("wrong variant"),
         }
@@ -186,7 +176,7 @@ mod tests {
 
     #[test]
     fn create_account_too_short_returns_none() {
-        let mut data = [0u8; 192];
+        let mut data = [0u8; 64];
         data[0] = 0;
         assert!(LaurelinInstruction::try_from_bytes(&data).is_none());
     }
