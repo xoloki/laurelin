@@ -31,7 +31,7 @@ jobs:
 
       # ── Build circuit + wallet together (shared deps compiled once) ─────
       - name: Build circuit + wallet
-        run: cargo build --release --package laurelin-circuit --package laurelin-wallet --bin laurelin-integration-test
+        run: cargo build --release --bin laurelin-setup --bin laurelin-integration-test
 
       # ── Trusted setup ────────────────────────────────────────────────────
       - name: Run trusted setup (generates pk.bin + contract/src/*_vk_generated.rs)

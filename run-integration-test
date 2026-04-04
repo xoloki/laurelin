@@ -8,7 +8,7 @@ RPC_URL=http://127.0.0.1:8899
 PK_DIR=/tmp/laurelin-setup
 
 echo "==> Building circuit + wallet (shared deps compiled once)..."
-cargo build --release --package laurelin-circuit --package laurelin-wallet
+cargo build --release --bin laurelin-setup --bin laurelin-integration-test
 
 echo "==> Running trusted setup (generates PK + VK files)..."
 ./target/release/laurelin-setup --pk-dir "$PK_DIR" --vk-dir contract/src
