@@ -140,16 +140,7 @@ fn main() -> anyhow::Result<()> {
     for (i, w) in wallets.iter().enumerate() {
         let kp = w.solana_keypair()?;
         let pda = w.pda(&program_id);
-        let mut identity = [0u8; 64];
-        identity[63] = 1; // BJJ identity: (X=0, Y=1)
-        let ix = create_account(
-            &program_id,
-            &kp.pubkey(),
-            &pda,
-            &w.laurelin_pk_bytes,
-            &identity,
-            &identity,
-        );
+        let ix = create_account(&program_id, &kp.pubkey(), &pda, &w.laurelin_pk_bytes);
         let sig = send_instructions(&client, &kp, &[set_compute_unit_limit(100_000), ix])?;
         eprintln!("  Wallet {i}: account created, PDA={pda}, sig={sig}");
     }

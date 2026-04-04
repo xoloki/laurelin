@@ -15,17 +15,7 @@ pub fn run(wallet: &Wallet, cfg: &ResolvedConfig) -> anyhow::Result<()> {
     let program_id: Pubkey = cfg.program_id.parse()?;
     let pda = wallet.pda(&program_id);
 
-    // BJJ identity point: (X=0, Y=1) — 64 bytes: 31 zero bytes + 0x01 padding
-    let mut identity = [0u8; 64];
-    identity[63] = 1;
-    let ix = create_account(
-        &program_id,
-        &kp.pubkey(),
-        &pda,
-        &wallet.laurelin_pk_bytes,
-        &identity,
-        &identity,
-    );
+    let ix = create_account(&program_id, &kp.pubkey(), &pda, &wallet.laurelin_pk_bytes);
 
     let sig = send_instructions(&client, &kp, &[set_compute_unit_limit(100_000), ix])?;
     println!("Account created: {pda}");
